@@ -30,3 +30,6 @@ dist-ssr
 *.pyc
 sessions
 .env
+
+# Extra files
+yarn.lock
