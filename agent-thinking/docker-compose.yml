@@ -1,20 +1,19 @@
 version: '3.8'
 
 services:
-  agent_extended:
+  agent_thinking:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: agent_extended
+    container_name: agent_thinking
     environment:
       - POETRY_NO_INTERACTION=1
       - POETRY_VIRTUALENVS_CREATE=false
       - POETRY_CACHE_DIR=/var/cache/pypoetry
     ports:
-      # - "8080:8080"
       - "8000:8000"
     volumes:
-      - .:/usr/src/app # Mount the current directory to the working directory in the container
+      - .:/usr/src/app
     tty: true
     stdin_open: true
     entrypoint: ["./entrypoint.sh"]
