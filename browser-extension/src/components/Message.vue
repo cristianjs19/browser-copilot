@@ -11,7 +11,18 @@ import CopyButton from './CopyButton.vue'
 import * as echarts from 'echarts'
 import moment from 'moment'
 
-const props = defineProps<{ text: string, file: Record<string, string>, isUser: boolean, isComplete: boolean, isSuccess: boolean, agentLogo: string, agentName: string, agentId: string }>()
+const props = defineProps<{ 
+  text: string, 
+  file: Record<string, string>, 
+  isUser: boolean, 
+  isComplete: boolean, 
+  isSuccess: boolean, 
+  agentLogo: string, 
+  agentName: string, 
+  agentId: string,
+  tokens?: number,
+  thoughtsTokens?: number
+}>()
 const { t } = useI18n()
 const renderedMsg = computed(() => props.isUser ? props.text.replaceAll('\n', '<br/>') : renderMarkDown(props.text))
 const messageElement = ref<HTMLElement | null>(null);
@@ -143,6 +154,12 @@ onBeforeUnmount(() => {
         </template>
       </div>
       <div class="ml-3 dot-pulse" v-if="!isComplete" />
+      
+      <!-- Token usage information for AI agent responses -->
+      <div v-if="!isUser && isComplete && tokens !== undefined" class="mt-2 text-xs text-gray-500 flex items-center gap-2">
+        <span>{{ tokens }} tokens</span>
+        <span v-if="thoughtsTokens !== undefined">({{ thoughtsTokens }} thinking)</span>
+      </div>
     </div>
   </div>
 </template>

@@ -4,19 +4,26 @@ import { AuthService, AuthConfig } from "./auth"
 import { fetchJson, fetchStreamJson } from "./http"
 import { AgentFlow } from "./flow"
 
+// Type definition for token response from the backend
+export interface TokenResponse {
+  type: "tokens"
+  tokens: number
+  thoughts_tokens?: number
+}
+
 export class Agent {
     url: string
     logo: string
     manifest: AgentManifest
-    activationRule: AgentRule
-    activationAction: ActivationAction
+    activationRule?: AgentRule
+    activationAction?: ActivationAction
 
     private constructor(url: string, manifest: AgentManifest) {
         this.url = url
         this.logo = `${url}/logo.png`
         this.manifest = manifest
-        this.activationRule = manifest.onHttpRequest?.find(r => r.actions.find(a => a.activate))!
-        this.activationAction = this.activationRule?.actions.find(a => a.activate)!.activate!
+        this.activationRule = manifest.onHttpRequest?.find(r => r.actions.find(a => a.activate))
+        this.activationAction = this.activationRule?.actions.find(a => a.activate)?.activate
     }
 
     public static async fromUrl(url: string): Promise<Agent> {
@@ -80,6 +87,26 @@ export class Agent {
                 yield part
             } else {
                 yield AgentFlow.fromJsonObject(part)
+            }
+        }
+    }
+
+    public async * chat(msg: string, sessionId: string, authService?: AuthService): AsyncIterable<string | TokenResponse | AgentFlow> {
+
+        const ret = await fetchStreamJson(`${this.sessionUrl(sessionId)}/chat`, await this.buildHttpPost({ question: msg }, authService))
+        for await (const part of ret) {
+            if (typeof part === "string") {
+                yield part;
+            } else if (part.type === "content") {
+                yield part.content;
+            } else if (part.type === "tokens") {
+                yield part as TokenResponse; // Pass token info as object
+            } else if (part.type === "error") {
+                throw new Error(part.error || "Unknown error occurred");
+            } else if (part.type === "end") {
+                break;
+            } else {
+                yield AgentFlow.fromJsonObject(part);
             }
         }
     }

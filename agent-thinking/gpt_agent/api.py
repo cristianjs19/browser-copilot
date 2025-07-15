@@ -1,18 +1,23 @@
 import logging
 import os
 import traceback
-from typing import AsyncIterator, Annotated, Optional
+from typing import Annotated, AsyncGenerator, AsyncIterator, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, status, Request
-from fastapi.responses import FileResponse, StreamingResponse, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import ServerSentEvent
 
-from gpt_agent.agent import Agent, AgentAction
+from gpt_agent.agent import Agent
 from gpt_agent.auth import get_current_user
-from gpt_agent.domain import Session, Question, TranscriptionQuestion, SessionBase
-from gpt_agent.file_system_repos import SessionsRepository, QuestionsRepository, TranscriptionsRepository
+from gpt_agent.domain import Question, Session, SessionBase, TranscriptionQuestion
+from gpt_agent.file_system_repos import (
+    QuestionsRepository,
+    SessionsRepository,
+    TranscriptionsRepository,
+)
+from gpt_agent.gemini import GeminiService, StreamingChunk
 
 logging.basicConfig()
 logger = logging.getLogger("gpt_agent")
@@ -47,7 +52,9 @@ async def get_logo() -> FileResponse:
 async def create_session(req: SessionBase, user: Annotated[str, Depends(get_current_user)]) -> Session:
     ret = Session(**req.model_dump(), user=user)
     await sessions_repo.save_session(ret)
-    Agent(ret).start_session()
+    # Initialize Gemini service for the new session
+    gemini_service = GeminiService(ret)
+    gemini_service.start_session()
     return ret
 
 
@@ -65,6 +72,14 @@ async def answer_question(
     # If you don't want to use response streaming you can just return a pydantic object like in
     # create session endpoint.
     return StreamingResponse(agent_response_stream(req, session), media_type="text/event-stream")
+
+
+@app.post('/sessions/{session_id}/chat')
+async def chat(
+        session_id: str, req: QuestionRequest, user: Annotated[str, Depends(get_current_user)]) -> StreamingResponse:
+    session = await _find_session(session_id, user)
+    chunk_generator = chat_response_stream(req, session)
+    return StreamingResponse(stream_response_chunks(chunk_generator), media_type="text/event-stream")
 
 
 async def _find_session(session_id: str, user: str) -> Session:
@@ -91,6 +106,41 @@ async def agent_response_stream(req: QuestionRequest, session: Session) -> Async
     except Exception as e:
         traceback.print_exception(e)
         yield ServerSentEvent(event="error").encode()
+
+
+async def chat_response_stream(req: QuestionRequest, session: Session) -> AsyncGenerator[StreamingChunk, None]:
+    """Generate streaming response using Gemini service"""
+    try:
+        gemini_service = GeminiService(session)
+        complete_answer = ""
+        
+        # Generate response using Gemini
+        async for chunk in gemini_service.generate_standard_response(req.question):
+            if chunk.type == "content" and chunk.content:
+                complete_answer += chunk.content
+            yield chunk
+        
+        question = Question(question=req.question, answer=complete_answer, session=session)
+        await questions_repo.save_question(question)
+        
+    except Exception as e:
+        logger.error(f"Error in chat_response_stream: {str(e)}")
+        yield StreamingChunk(type="error", error=str(e))
+
+
+async def stream_response_chunks(
+    chunk_generator: AsyncGenerator[StreamingChunk, None]
+) -> AsyncGenerator[str, None]:
+    """Convert StreamingChunk objects to Server-Sent Events format."""
+    try:
+        async for chunk in chunk_generator:
+            yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
+        end_chunk = StreamingChunk(type="end")
+        yield f"data: {end_chunk.model_dump_json(exclude_none=True)}\n\n"
+    except Exception as e:
+        traceback.print_exception(e)
+        error_chunk = StreamingChunk(type="error", error=str(e))
+        yield f"data: {error_chunk.model_dump_json(exclude_none=True)}\n\n"
 
 
 class TranscriptionRequest(BaseModel):

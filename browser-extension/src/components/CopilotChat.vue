@@ -51,7 +51,7 @@ const lastMessage = computed((): ChatMessage => props.messages[props.messages.le
       <div class="h-full flex flex-col">
         <div class="h-full flex flex-col overflow-y-auto mb-4" ref="messagesDiv">
           <Message v-for="message in messages" :text="message.text" :file="message.file" :is-user="message.isUser"
-            :is-complete="message.isComplete" :is-success="message.isSuccess" :agent-logo="agentLogo" :agent-name="agentName" :agent-id="agentId" />
+            :is-complete="message.isComplete" :is-success="message.isSuccess" :agent-logo="agentLogo" :agent-name="agentName" :agent-id="agentId" :tokens="message.tokens" :thoughts-tokens="message.thoughtsTokens" />
         </div>
         <ChatInput :can-send-message="lastMessage.isComplete" :agent-id="agentId"
           :support-recording="agentCapabilities.includes('transcripts')" @send-message="onUserMessage" />

@@ -1,5 +1,5 @@
 import browser from "webextension-polyfill"
-import { Agent, AgentRuleCondition, AddHeaderRuleAction, RecordInteractionRuleAction, RequestEvent } from "./agent"
+import { Agent, AgentRuleCondition, AddHeaderRuleAction, RecordInteractionRuleAction, RequestEvent, TokenResponse } from "./agent"
 import { AuthService } from "./auth"
 import { HttpServiceError, fetchJson } from "./http"
 import { BrowserMessage, InteractionSummary } from "./browser-message"
@@ -137,26 +137,55 @@ export class AgentSession {
     }
   }
 
-  public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean) => void, errorHandler: (error: any) => void) {
+  public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void, errorHandler: (error: any) => void) {
     try {
       if (file.data) {
         text = await this.agent.transcriptAudio(file.data, this.id!, this.authService);
       }
-      const ret = this.agent.ask(text, this.id!, this.authService)
+      const ret = this.agent.chat(text, this.id!, this.authService)
+      let tokens: number | undefined;
+      let thoughtsTokens: number | undefined;
+      
       for await (const part of ret) {
         if (typeof part === "string") {
           msgHandler(part, false)
+        } else if (this.isTokenResponse(part)) {
+          tokens = part.tokens;
+          thoughtsTokens = part.thoughts_tokens;
         } else {
           await new FlowExecutor(this.tabId, msgHandler).runFlow(part.steps)
         }
       }
-      msgHandler("", true)
+      msgHandler("", true, tokens, thoughtsTokens)
     } catch (e) {
       errorHandler(e)
     }
   }
 
-  public async resumeFlow(msgHandler: (text: string, complete: boolean) => void, errorHandler: (error: any) => void) {
+  private isTokenResponse(obj: any): obj is TokenResponse {
+    return typeof obj === "object" && obj.type === "tokens";
+  }
+
+  // public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean) => void, errorHandler: (error: any) => void) {
+  //   try {
+  //     if (file.data) {
+  //       text = await this.agent.transcriptAudio(file.data, this.id!, this.authService);
+  //     }
+  //     const ret = this.agent.ask(text, this.id!, this.authService)
+  //     for await (const part of ret) {
+  //       if (typeof part === "string") {
+  //         msgHandler(part, false)
+  //       } else {
+  //         await new FlowExecutor(this.tabId, msgHandler).runFlow(part.steps)
+  //       }
+  //     }
+  //     msgHandler("", true)
+  //   } catch (e) {
+  //     errorHandler(e)
+  //   }
+  // }
+
+  public async resumeFlow(msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void, errorHandler: (error: any) => void) {
     try {
       await new FlowExecutor(this.tabId, msgHandler).resumeFlow()
     } catch (e) {

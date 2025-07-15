@@ -41,9 +41,9 @@ export class FlowExecutor {
   // since runner may generate page navigations, we need to save state in each step and resume execution when starting sidepanel (since entire copilot frame is re created)
   storageKey: string;
   tabId: number;
-  msgHandler?: (text: string, complete: boolean) => void
+  msgHandler?: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void
 
-  constructor(tabId: number, msgHandler?: (text: string, complete: boolean) => void) {
+  constructor(tabId: number, msgHandler?: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void) {
     this.tabId = tabId;
     this.storageKey = `flow-${tabId}`;
     this.msgHandler = msgHandler;

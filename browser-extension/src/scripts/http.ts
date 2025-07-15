@@ -57,7 +57,14 @@ async function* fetchSSEStream(resp: Response, url: string, options?: RequestIni
       if (event.event) {
         yield JSON.parse(event.data)
       } else {
-        yield event.data
+        // Parse JSON data for StreamingChunk format
+        try {
+          const parsed = JSON.parse(event.data)
+          yield parsed
+        } catch (e) {
+          // Fallback to raw data if JSON parsing fails
+          yield event.data
+        }
       }
     }
   }

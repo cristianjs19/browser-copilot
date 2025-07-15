@@ -165,10 +165,14 @@ const onUserMessage = async (text: string, file: Record<string, string>) => {
   agentSession!.processUserMessage(text, file, onAgentResponse, onAgentError)
 }
 
-const onAgentResponse = (text: string, complete: boolean) => {
+const onAgentResponse = (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => {
   const lastMessage = messages.value[messages.value.length - 1]
   lastMessage.isComplete = complete
   lastMessage.text += text
+  if (complete && tokens !== undefined) {
+    lastMessage.tokens = tokens
+    lastMessage.thoughtsTokens = thoughtsTokens
+  }
 }
 
 const onAgentError = (error: any) => {
