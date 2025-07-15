@@ -181,7 +181,6 @@ const onStopStreaming = async () => {
     
     if (!lastMessage.isComplete) {
       console.log("Index.vue: Adding interrupted message");
-      lastMessage.text += t('responseInterrupted')
       lastMessage.isComplete = true
       lastMessage.isSuccess = false
     }
