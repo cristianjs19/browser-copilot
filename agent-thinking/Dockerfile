@@ -34,4 +34,4 @@ RUN chmod +x entrypoint.sh
 ENTRYPOINT [ "./entrypoint.sh" ]
 
 # Command to run your application
-CMD ["poetry", "run", "python", "-m", "gpt_agent"]
+# CMD ["poetry", "run", "python", "-m", "gpt_agent"]

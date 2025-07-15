@@ -8,11 +8,13 @@
     "scope": "{{ openid_scope }}"
   },
   {% endif %}
-  "capabilities": [ "transcripts" ],
+  "capabilities": [ "transcripts", "has_thinking_mode" ],
   "welcomeMessage": "Hi, I am an assistant based on GPT!\n\nI can help you with any question you may have. For example: you can ask me the current time :).",
   "prompts": [
       { "name" : "clock", "text" : "what is the current time?" },
-      { "name" : "abstracta", "text" : "please contact Abstracta" }
+      { "name" : "abstracta", "text" : "please contact Abstracta" },
+      { "name" : "contamining", "text" : "What are the main issues of contaminating our mother Earth?" },
+      { "name" : "planes", "text" : "Why planes are able to fly, in spite they are big and heavy machines?" }
   ],
   "contactEmail": "{{ contact_email }}"
 }

@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Agent } from '../scripts/agent'
-import { addAgent, ExistingAgentError } from '../scripts/agent-repository'
+import { addAgent, ExistingAgentError, setAgentThinkingMode } from '../scripts/agent-repository'
 import { saveAgentPrompts } from '../scripts/prompt-repository'
 import { ValidationResult } from '../scripts/validation';
 import ModalForm from './ModalForm.vue'
@@ -20,8 +20,24 @@ const validation = ref(ValidationResult.valid())
 const save = async () => {
   try {
     let agent = await Agent.fromUrl(url.value)
+    console.log(`Adding agent from ${url.value}`, agent);
+    console.log("Agent capabilities:", agent.manifest.capabilities);
+    
     await addAgent(agent)
     await saveAgentPrompts(agent.manifest.prompts, agent.manifest.id)
+    
+    // Store thinking mode capability if present in capabilities array
+    const hasThinkingMode = agent.manifest.capabilities?.includes('has_thinking_mode') || false
+    console.log("hasThinkingMode check result:", hasThinkingMode);
+    
+    if (hasThinkingMode) {
+      console.log("YES IT HAS THINKING MODE");
+      await setAgentThinkingMode(agent.manifest.id, true)
+    } else {
+      console.log("NO THINKING MODE CAPABILITY FOUND");
+      await setAgentThinkingMode(agent.manifest.id, false)
+    }
+    
     emit('saved', agent)
   } catch (e: any) {
     console.error(`There was a problem adding agent from ${url.value}`, e)

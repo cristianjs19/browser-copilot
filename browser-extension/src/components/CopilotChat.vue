@@ -12,14 +12,19 @@ import BtnClose from './BtnClose.vue'
 const props = defineProps<{ agentId: string, agentName: string, agentLogo: string, agentCapabilities: string[], messages: ChatMessage[] }>()
 const emit = defineEmits<{
   (e: 'close'): void,
-  (e: 'userMessage', text: string, file: Record<string, string>): void
+  (e: 'userMessage', text: string, file: Record<string, string>): void,
+  (e: 'stopStreaming'): void
 }>()
 
 const messagesDiv = ref<HTMLDivElement>()
 const showConfig = ref(false)
+const isStreaming = ref(false)
 
 watch(props.messages, async () => {
   await adjustMessagesScroll()
+  // Update streaming state based on last message
+  const lastMsg = lastMessage.value
+  isStreaming.value = !lastMsg.isComplete && lastMsg.isSuccess
 })
 
 const adjustMessagesScroll = async () => {
@@ -29,7 +34,13 @@ const adjustMessagesScroll = async () => {
 }
 
 const onUserMessage = async (text: string, file: Record<string, string>) => {
+  isStreaming.value = true
   emit('userMessage', text, file)
+}
+
+const onStopStreaming = () => {
+  isStreaming.value = false
+  emit('stopStreaming')
 }
 
 const lastMessage = computed((): ChatMessage => props.messages[props.messages.length - 1])
@@ -54,7 +65,10 @@ const lastMessage = computed((): ChatMessage => props.messages[props.messages.le
             :is-complete="message.isComplete" :is-success="message.isSuccess" :agent-logo="agentLogo" :agent-name="agentName" :agent-id="agentId" :tokens="message.tokens" :thoughts-tokens="message.thoughtsTokens" />
         </div>
         <ChatInput :can-send-message="lastMessage.isComplete" :agent-id="agentId"
-          :support-recording="agentCapabilities.includes('transcripts')" @send-message="onUserMessage" />
+          :support-recording="agentCapabilities.includes('transcripts')" 
+          :is-streaming="isStreaming"
+          @send-message="onUserMessage" 
+          @stop-streaming="onStopStreaming" />
       </div>
     </template>
     <template v-slot:modalsContainer>

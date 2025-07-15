@@ -12,6 +12,7 @@ export class AgentSession {
   id?: string
   authService?: AuthService
   pollId?: number
+  streamingController?: AbortController
 
   constructor(tabId: number, agent: Agent, url: string, id?: string, pollId?: number) {
     this.id = id
@@ -138,16 +139,40 @@ export class AgentSession {
   }
 
   public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void, errorHandler: (error: any) => void) {
+    console.log("AgentSession: Starting processUserMessage");
+    
+    // Cancel any existing streaming
+    if (this.streamingController) {
+      console.log("AgentSession: Cancelling existing streaming controller");
+      this.streamingController.abort()
+    }
+    
+    // Create new controller for this streaming operation
+    this.streamingController = new AbortController()
+    const signal = this.streamingController.signal
+    console.log("AgentSession: Created new AbortController", this.streamingController);
+    
     try {
       if (file.data) {
         text = await this.agent.transcriptAudio(file.data, this.id!, this.authService);
       }
+      
       const ret = this.agent.chat(text, this.id!, this.authService)
       let tokens: number | undefined;
       let thoughtsTokens: number | undefined;
       let hasTokens = false;
+      let streamingStopped = false;
+      
+      console.log("AgentSession: Starting to iterate over chat response");
       
       for await (const part of ret) {
+        // Check if streaming was cancelled
+        if (signal.aborted) {
+          console.log("AgentSession: Streaming was cancelled, breaking out of loop");
+          streamingStopped = true;
+          break;
+        }
+        
         if (typeof part === "string") {
           msgHandler(part, false)
         } else if (this.isTokenResponse(part)) {
@@ -160,13 +185,32 @@ export class AgentSession {
         }
       }
       
+      if (streamingStopped) {
+        console.log("AgentSession: Stream was stopped by user");
+        // Show interrupted message
+        msgHandler("", true);
+        return;
+      }
+      
+      console.log("AgentSession: Streaming completed normally");
+      
       if (hasTokens) {
         msgHandler("", true, tokens, thoughtsTokens)
       } else {
         msgHandler("", true)
       }
     } catch (e) {
-      errorHandler(e)
+      console.log("AgentSession: Error in processUserMessage:", e);
+      if (signal.aborted) {
+        console.log("AgentSession: Error was due to abort signal");
+        // Stream was cancelled, show interrupted message
+        msgHandler("", true);
+      } else {
+        errorHandler(e)
+      }
+    } finally {
+      console.log("AgentSession: Cleaning up streaming controller");
+      this.streamingController = undefined;
     }
   }
 
@@ -223,6 +267,16 @@ export class AgentSession {
   private async stopPolling() {
     if (this.pollId) {
       clearInterval(this.pollId)
+    }
+  }
+
+  public stopStreaming() {
+    console.log("AgentSession: stopStreaming called", this.streamingController);
+    if (this.streamingController) {
+      console.log("AgentSession: Aborting streaming controller");
+      this.streamingController.abort()
+    } else {
+      console.log("AgentSession: No streaming controller to abort");
     }
   }
 
