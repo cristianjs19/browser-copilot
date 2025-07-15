@@ -97,16 +97,23 @@ export class Agent {
         for await (const part of ret) {
             if (typeof part === "string") {
                 yield part;
-            } else if (part.type === "content") {
-                yield part.content;
-            } else if (part.type === "tokens") {
-                yield part as TokenResponse; // Pass token info as object
-            } else if (part.type === "error") {
-                throw new Error(part.error || "Unknown error occurred");
-            } else if (part.type === "end") {
-                break;
+            } else if (part && typeof part === "object" && part.type) {
+                // Only process objects that have a valid type property
+                if (part.type === "content" && part.content) {
+                    yield part.content;
+                } else if (part.type === "tokens") {
+                    yield part as TokenResponse;
+                } else if (part.type === "error") {
+                    throw new Error(part.error || "Unknown error occurred");
+                } else if (part.type === "end") {
+                    break;
+                }
             } else {
-                yield AgentFlow.fromJsonObject(part);
+                try {
+                    yield AgentFlow.fromJsonObject(part);
+                } catch (e) {
+                    console.warn("Received invalid object from chat stream, skipping:", part);
+                }
             }
         }
     }

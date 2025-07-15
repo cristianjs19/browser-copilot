@@ -166,6 +166,7 @@ const onUserMessage = async (text: string, file: Record<string, string>) => {
 }
 
 const onAgentResponse = (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => {
+  console.log("Index.vue onAgentResponse: text=", text, "complete=", complete, "tokens=", tokens, "thoughtsTokens=", thoughtsTokens);
   const lastMessage = messages.value[messages.value.length - 1]
   lastMessage.isComplete = complete
   lastMessage.text += text

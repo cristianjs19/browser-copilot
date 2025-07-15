@@ -77,12 +77,16 @@ class GeminiService:
         logger.info(f"Starting standard response generation for session {self._session.id}")
         
         try:
+            # Add user message to memory
             self._memory.chat_memory.add_user_message(message)
             
+            # Get conversation history from memory
             conversation_history = self._get_conversation_history()
             
-            contents = self._build_gemini_contents(conversation_history, message)
+            # Build contents for Gemini API
+            contents = self._build_gemini_contents(conversation_history)
             
+            logger.debug(f"**Generated contents for Gemini: {contents}**")
             # Configure generation
             config = types.GenerateContentConfig(
                 temperature=self.temperature,
@@ -155,11 +159,14 @@ class GeminiService:
         logger.info(f"Starting thinking mode response generation for session {self._session.id}")
         
         try:
+            # Add user message to memory
             self._memory.chat_memory.add_user_message(message)
             
+            # Get conversation history from memory
             conversation_history = self._get_conversation_history()
             
-            contents = self._build_gemini_contents(conversation_history, message)
+            # Build contents for Gemini API
+            contents = self._build_gemini_contents(conversation_history)
             
             # Configure generation with thinking mode
             config = types.GenerateContentConfig(
@@ -241,13 +248,12 @@ class GeminiService:
         """Get conversation history from memory"""
         return self._memory.chat_memory.messages
 
-    def _build_gemini_contents(self, conversation_history: List[BaseMessage], current_message: str) -> List[dict]:
+    def _build_gemini_contents(self, conversation_history: List[BaseMessage]) -> List[dict]:
         """
         Build contents in Gemini API format from Langchain conversation history
         
         Args:
             conversation_history: List of BaseMessage objects from Langchain
-            current_message: Current user message
             
         Returns:
             List of content dictionaries for Gemini API
@@ -266,12 +272,6 @@ class GeminiService:
                     "role": "model",
                     "parts": [{"text": message.content}]
                 })
-        
-        # Add current message
-        contents.append({
-            "role": "user",
-            "parts": [{"text": current_message}]
-        })
         
         return contents
 

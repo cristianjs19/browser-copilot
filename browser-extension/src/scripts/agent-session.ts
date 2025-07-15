@@ -145,6 +145,7 @@ export class AgentSession {
       const ret = this.agent.chat(text, this.id!, this.authService)
       let tokens: number | undefined;
       let thoughtsTokens: number | undefined;
+      let hasTokens = false;
       
       for await (const part of ret) {
         if (typeof part === "string") {
@@ -152,11 +153,18 @@ export class AgentSession {
         } else if (this.isTokenResponse(part)) {
           tokens = part.tokens;
           thoughtsTokens = part.thoughts_tokens;
+          hasTokens = true;
+          console.log("AgentSession: Captured tokens:", tokens, "thoughtsTokens:", thoughtsTokens);
         } else {
           await new FlowExecutor(this.tabId, msgHandler).runFlow(part.steps)
         }
       }
-      msgHandler("", true, tokens, thoughtsTokens)
+      
+      if (hasTokens) {
+        msgHandler("", true, tokens, thoughtsTokens)
+      } else {
+        msgHandler("", true)
+      }
     } catch (e) {
       errorHandler(e)
     }
