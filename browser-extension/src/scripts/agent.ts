@@ -91,10 +91,22 @@ export class Agent {
         }
     }
 
-    public async * chat(msg: string, sessionId: string, authService?: AuthService): AsyncIterable<string | TokenResponse | AgentFlow> {
-
-        const ret = await fetchStreamJson(`${this.sessionUrl(sessionId)}/chat`, await this.buildHttpPost({ question: msg }, authService))
+    public async * chat(msg: string, sessionId: string, authService?: AuthService, abortSignal?: AbortSignal): AsyncIterable<string | TokenResponse | AgentFlow> {
+        const options = await this.buildHttpPost({ question: msg }, authService)
+        
+        // Add abort signal if provided
+        if (abortSignal) {
+            options.signal = abortSignal
+        }
+        
+        const ret = await fetchStreamJson(`${this.sessionUrl(sessionId)}/chat`, options)
         for await (const part of ret) {
+            // Check if aborted before processing each part
+            if (abortSignal?.aborted) {
+                console.log("Agent.chat: Stream cancelled by AbortSignal");
+                break;
+            }
+            
             if (typeof part === "string") {
                 yield part;
             } else if (part && typeof part === "object" && part.type) {

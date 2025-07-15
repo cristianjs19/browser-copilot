@@ -303,7 +303,7 @@ const showStopButton = computed(() => {
   "en": {
     "placeholder": "Type / to use a prompt, or type a message",
     "recordingAudio": "Recording audio",
-    "thinkingMode": "Thinking MODE"
+    "thinkingMode": "Thinking Mock"
   },
   "es": {
     "placeholder": "Usa / para usar un prompt, o escribe un mensaje",

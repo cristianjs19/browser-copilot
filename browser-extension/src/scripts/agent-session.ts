@@ -5,6 +5,39 @@ import { HttpServiceError, fetchJson } from "./http"
 import { BrowserMessage, InteractionSummary } from "./browser-message"
 import { FlowExecutor } from "./flow"
 
+// Global streaming controller registry to handle the serialization issue
+class StreamingControllerRegistry {
+  private static controllers: Map<string, AbortController> = new Map()
+  
+  static setController(sessionId: string, controller: AbortController) {
+    console.log(`StreamingRegistry: Setting controller for session ${sessionId}`);
+    this.controllers.set(sessionId, controller)
+  }
+  
+  static getController(sessionId: string): AbortController | undefined {
+    const controller = this.controllers.get(sessionId)
+    console.log(`StreamingRegistry: Getting controller for session ${sessionId}:`, controller);
+    return controller
+  }
+  
+  static removeController(sessionId: string) {
+    console.log(`StreamingRegistry: Removing controller for session ${sessionId}`);
+    this.controllers.delete(sessionId)
+  }
+  
+  static abortStreaming(sessionId: string): boolean {
+    const controller = this.controllers.get(sessionId)
+    if (controller) {
+      console.log(`StreamingRegistry: Aborting streaming for session ${sessionId}`);
+      controller.abort()
+      this.controllers.delete(sessionId)
+      return true
+    }
+    console.log(`StreamingRegistry: No controller found for session ${sessionId}`);
+    return false
+  }
+}
+
 export class AgentSession {
   tabId: number
   agent: Agent
@@ -12,7 +45,6 @@ export class AgentSession {
   id?: string
   authService?: AuthService
   pollId?: number
-  streamingController?: AbortController
 
   constructor(tabId: number, agent: Agent, url: string, id?: string, pollId?: number) {
     this.id = id
@@ -141,23 +173,29 @@ export class AgentSession {
   public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void, errorHandler: (error: any) => void) {
     console.log("AgentSession: Starting processUserMessage");
     
-    // Cancel any existing streaming
-    if (this.streamingController) {
-      console.log("AgentSession: Cancelling existing streaming controller");
-      this.streamingController.abort()
+    if (!this.id) {
+      console.error("AgentSession: No session ID available");
+      errorHandler(new Error("No session ID available"));
+      return;
     }
     
+    // Cancel any existing streaming for this session
+    StreamingControllerRegistry.abortStreaming(this.id);
+    
     // Create new controller for this streaming operation
-    this.streamingController = new AbortController()
-    const signal = this.streamingController.signal
-    console.log("AgentSession: Created new AbortController", this.streamingController);
+    const streamingController = new AbortController()
+    const signal = streamingController.signal
+    console.log("AgentSession: Created new AbortController", streamingController);
+    
+    // Store the controller in the registry
+    StreamingControllerRegistry.setController(this.id, streamingController);
     
     try {
       if (file.data) {
-        text = await this.agent.transcriptAudio(file.data, this.id!, this.authService);
+        text = await this.agent.transcriptAudio(file.data, this.id, this.authService);
       }
       
-      const ret = this.agent.chat(text, this.id!, this.authService)
+      const ret = this.agent.chat(text, this.id, this.authService, signal)
       let tokens: number | undefined;
       let thoughtsTokens: number | undefined;
       let hasTokens = false;
@@ -210,32 +248,16 @@ export class AgentSession {
       }
     } finally {
       console.log("AgentSession: Cleaning up streaming controller");
-      this.streamingController = undefined;
+      // Clean up the controller from registry
+      if (this.id) {
+        StreamingControllerRegistry.removeController(this.id);
+      }
     }
   }
 
   private isTokenResponse(obj: any): obj is TokenResponse {
     return typeof obj === "object" && obj.type === "tokens";
   }
-
-  // public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean) => void, errorHandler: (error: any) => void) {
-  //   try {
-  //     if (file.data) {
-  //       text = await this.agent.transcriptAudio(file.data, this.id!, this.authService);
-  //     }
-  //     const ret = this.agent.ask(text, this.id!, this.authService)
-  //     for await (const part of ret) {
-  //       if (typeof part === "string") {
-  //         msgHandler(part, false)
-  //       } else {
-  //         await new FlowExecutor(this.tabId, msgHandler).runFlow(part.steps)
-  //       }
-  //     }
-  //     msgHandler("", true)
-  //   } catch (e) {
-  //     errorHandler(e)
-  //   }
-  // }
 
   public async resumeFlow(msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void, errorHandler: (error: any) => void) {
     try {
@@ -248,6 +270,12 @@ export class AgentSession {
   public async close() {
     await this.removeRequestRules()
     await this.stopPolling()
+    
+    // Clean up any streaming controllers
+    if (this.id) {
+      StreamingControllerRegistry.abortStreaming(this.id);
+    }
+    
     try {
       const endAction = this.agent.manifest.onSessionClose
       if (endAction) {
@@ -271,12 +299,16 @@ export class AgentSession {
   }
 
   public stopStreaming() {
-    console.log("AgentSession: stopStreaming called", this.streamingController);
-    if (this.streamingController) {
-      console.log("AgentSession: Aborting streaming controller");
-      this.streamingController.abort()
+    console.log("AgentSession: stopStreaming called for session:", this.id);
+    if (this.id) {
+      const success = StreamingControllerRegistry.abortStreaming(this.id);
+      if (success) {
+        console.log("AgentSession: Successfully aborted streaming");
+      } else {
+        console.log("AgentSession: No active streaming to abort");
+      }
     } else {
-      console.log("AgentSession: No streaming controller to abort");
+      console.log("AgentSession: No session ID available for stopping streaming");
     }
   }
 

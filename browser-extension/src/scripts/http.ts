@@ -47,49 +47,60 @@ async function* fetchSSEStream(resp: Response, url: string, options?: RequestIni
   let done = false
   let buffer = ''
   
-  while (!done) {
-    let result = await reader.read()
-    done = result.done
-    
-    if (result.value) {
-      // Accumulate the new data in the buffer
-      buffer += new TextDecoder("utf-8").decode(result.value)
+  try {
+    while (!done) {
+      // Check if request was aborted
+      if (options?.signal?.aborted) {
+        console.log("SSE stream cancelled by AbortSignal");
+        break;
+      }
       
-      // Process complete events from the buffer
-      let eventEnd = buffer.indexOf('\n\n')
-      while (eventEnd !== -1) {
-        let eventData = buffer.substring(0, eventEnd)
-        buffer = buffer.substring(eventEnd + 2)
+      let result = await reader.read()
+      done = result.done
+      
+      if (result.value) {
+        // Accumulate the new data in the buffer
+        buffer += new TextDecoder("utf-8").decode(result.value)
         
-        if (eventData.trim()) {
-          try {
-            const event = ServerSentEvent.parseEventString(eventData)
-            if (event.event === "error") {
-              console.warn(`Problem while reading stream response from ${options?.method ? options.method : 'GET'} ${url}`, event)
-              throw new HttpServiceError()
-            }
-            
-            if (event.event) {
-              yield JSON.parse(event.data)
-            } else {
-              // Parse JSON data for StreamingChunk format
-              try {
-                const parsed = JSON.parse(event.data)
-                yield parsed
-              } catch (e) {
-                // Log the parsing error and skip malformed chunks instead of yielding raw data
-                console.warn(`Failed to parse SSE chunk as JSON, skipping: ${event.data}`, e)
-                // Don't yield anything for malformed chunks - just skip them
+        // Process complete events from the buffer
+        let eventEnd = buffer.indexOf('\n\n')
+        while (eventEnd !== -1) {
+          let eventData = buffer.substring(0, eventEnd)
+          buffer = buffer.substring(eventEnd + 2)
+          
+          if (eventData.trim()) {
+            try {
+              const event = ServerSentEvent.parseEventString(eventData)
+              if (event.event === "error") {
+                console.warn(`Problem while reading stream response from ${options?.method ? options.method : 'GET'} ${url}`, event)
+                throw new HttpServiceError()
               }
+              
+              if (event.event) {
+                yield JSON.parse(event.data)
+              } else {
+                // Parse JSON data for StreamingChunk format
+                try {
+                  const parsed = JSON.parse(event.data)
+                  yield parsed
+                } catch (e) {
+                  // Log the parsing error and skip malformed chunks instead of yielding raw data
+                  console.warn(`Failed to parse SSE chunk as JSON, skipping: ${event.data}`, e)
+                  // Don't yield anything for malformed chunks - just skip them
+                }
+              }
+            } catch (e) {
+              console.warn(`Failed to parse SSE event, skipping: ${eventData}`, e)
             }
-          } catch (e) {
-            console.warn(`Failed to parse SSE event, skipping: ${eventData}`, e)
           }
+          
+          eventEnd = buffer.indexOf('\n\n')
         }
-        
-        eventEnd = buffer.indexOf('\n\n')
       }
     }
+  } finally {
+    // Always cancel the reader when done or aborted
+    await reader.cancel();
   }
   
   // Process any remaining data in the buffer
