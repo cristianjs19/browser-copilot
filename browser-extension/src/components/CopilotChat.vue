@@ -74,11 +74,11 @@ const lastMessage = computed((): ChatMessage => props.messages[props.messages.le
             :is-complete="message.isComplete" :is-success="message.isSuccess" :agent-logo="agentLogo" :agent-name="agentName" :agent-id="agentId" :tokens="message.tokens" :thoughts-tokens="message.thoughtsTokens" />
         </div>
         
-        <!-- Alert Notification positioned above the input -->
         <div v-if="showInterruptedAlert" class="mb-2 mx-2">
           <AlertNotification 
             :show="showInterruptedAlert" 
             :message="t('responseInterrupted')" 
+            :auto-hide-delay="3000"
             type="error"
             @close="onCloseAlert" 
           />

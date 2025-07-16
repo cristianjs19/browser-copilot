@@ -1,14 +1,16 @@
 <script lang="ts" setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, onUnmounted } from 'vue'
 import { XIcon } from 'vue-tabler-icons'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   show: boolean
   message: string
   type?: 'error' | 'success' | 'warning'
   autoHide?: boolean
   autoHideDelay?: number
-}>()
+}>(), {
+  autoHide: true
+})
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -29,35 +31,52 @@ const iconClasses = {
   warning: 'text-yellow-500'
 }
 
+const clearExistingTimeout = () => {
+  if (timeoutId.value) {
+    clearTimeout(timeoutId.value)
+    timeoutId.value = null
+  }
+}
+
+const startAutoHideTimer = () => {
+  if (props.autoHide) {
+    clearExistingTimeout()
+    
+    timeoutId.value = setTimeout(() => {
+      handleClose()
+    }, props.autoHideDelay ?? 3000)
+  }
+}
+
+const handleClose = () => {
+  visible.value = false
+  clearExistingTimeout()
+}
+  
+const onAfterLeave = () => {
+    emit('close')
+}
+
 onMounted(() => {
   visible.value = props.show
+  if (props.show) {
+    startAutoHideTimer()
+  }
 })
 
 watch(() => props.show, (newShow) => {
   visible.value = newShow
   
-  if (newShow && (props.autoHide ?? true)) {
-    // Clear any existing timeout
-    if (timeoutId.value) {
-      clearTimeout(timeoutId.value)
-    }
-    
-    // Set new timeout
-    timeoutId.value = setTimeout(() => {
-      visible.value = false
-      emit('close')
-    }, props.autoHideDelay ?? 3000)
+  if (newShow) {
+    startAutoHideTimer()
+  } else {
+    clearExistingTimeout()
   }
 })
 
-const handleClose = () => {
-  visible.value = false
-  if (timeoutId.value) {
-    clearTimeout(timeoutId.value)
-    timeoutId.value = null
-  }
-  emit('close')
-}
+onUnmounted(() => {
+  clearExistingTimeout()
+})
 
 const alertType = props.type ?? 'error'
 </script>
@@ -70,6 +89,7 @@ const alertType = props.type ?? 'error'
     leave-active-class="transition-all duration-200 ease-in"
     leave-from-class="opacity-100 transform translate-y-0"
     leave-to-class="opacity-0 transform -translate-y-2"
+    @after-leave="onAfterLeave"
   >
     <div v-if="visible" :class="`flex items-center gap-3 p-3 rounded-lg border shadow-sm ${alertClasses[alertType]}`">
       <!-- Alert Icon -->
