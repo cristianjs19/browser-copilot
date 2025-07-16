@@ -26,8 +26,9 @@ export class ChatMessage {
   isSuccess: boolean
   tokens?: number
   thoughtsTokens?: number
+  thoughts?: string
 
-  constructor(text: string, file: Record<string, string>, isUser: boolean, isComplete: boolean, isSuccess: boolean, tokens?: number, thoughtsTokens?: number) {
+  constructor(text: string, file: Record<string, string>, isUser: boolean, isComplete: boolean, isSuccess: boolean, tokens?: number, thoughtsTokens?: number, thoughts?: string) {
     this.text = text
     this.file = file
     this.isUser = isUser
@@ -35,6 +36,7 @@ export class ChatMessage {
     this.isSuccess = isSuccess
     this.tokens = tokens
     this.thoughtsTokens = thoughtsTokens
+    this.thoughts = thoughts
   }
 
   public static userMessage(text: string, file: Record<string, string>): ChatMessage {
@@ -50,6 +52,6 @@ export class ChatMessage {
   }
 
   public static fromJsonObject(obj: any): ChatMessage {
-    return new ChatMessage(obj.text, obj.file, obj.isUser, obj.isComplete, obj.isSuccess, obj.tokens, obj.thoughtsTokens)
+    return new ChatMessage(obj.text, obj.file, obj.isUser, obj.isComplete, obj.isSuccess, obj.tokens, obj.thoughtsTokens, obj.thoughts)
   }
 }

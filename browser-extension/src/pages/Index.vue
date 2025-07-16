@@ -189,7 +189,7 @@ const onStopStreaming = async () => {
   }
 }
 
-const onAgentResponse = (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => {
+const onAgentResponse = (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number, thoughts?: string) => {
 
   const lastMessage = messages.value[messages.value.length - 1]
   lastMessage.isComplete = complete
@@ -197,6 +197,9 @@ const onAgentResponse = (text: string, complete: boolean, tokens?: number, thoug
   if (complete && tokens !== undefined) {
     lastMessage.tokens = tokens
     lastMessage.thoughtsTokens = thoughtsTokens
+  }
+  if (thoughts !== undefined) {
+    lastMessage.thoughts = thoughts
   }
 }
 

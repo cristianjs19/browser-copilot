@@ -11,6 +11,15 @@ export interface TokenResponse {
   thoughts_tokens?: number
 }
 
+// Type definition for thinking mode response chunks
+export interface ThinkingChunk {
+  type: "content" | "thought" | "tokens" | "end" | "error"
+  content?: string
+  tokens?: number
+  thoughts_tokens?: number
+  error?: string
+}
+
 export class Agent {
     url: string
     logo: string
@@ -99,7 +108,7 @@ export class Agent {
             options.signal = abortSignal
         }
         
-        const ret = await fetchStreamJson(`${this.sessionUrl(sessionId)}/chat`, options)
+        const ret = await fetchStreamJson(`${this.sessionUrl(sessionId)}/chat-gemini`, options)
         for await (const part of ret) {
             // Check if aborted before processing each part
             if (abortSignal?.aborted) {
@@ -124,7 +133,48 @@ export class Agent {
                 try {
                     yield AgentFlow.fromJsonObject(part);
                 } catch (e) {
-                    console.warn("Received invalid object from chat stream, skipping:", part);
+                    console.warn("Received invalid object from chat stream, skipping:", part, e);
+                }
+            }
+        }
+    }
+
+    public async * chatThinking(msg: string, sessionId: string, authService?: AuthService, abortSignal?: AbortSignal): AsyncIterable<string | ThinkingChunk | AgentFlow> {
+        const options = await this.buildHttpPost({ question: msg }, authService)
+        
+        // Add abort signal if provided
+        if (abortSignal) {
+            options.signal = abortSignal
+        }
+        
+        const ret = await fetchStreamJson(`${this.sessionUrl(sessionId)}/thinking-chat-gemini`, options)
+        for await (const part of ret) {
+            // Check if aborted before processing each part
+            if (abortSignal?.aborted) {
+                console.log("Agent.chatThinking: Stream cancelled by AbortSignal");
+                break;
+            }
+            
+            if (typeof part === "string") {
+                yield part;
+            } else if (part && typeof part === "object" && part.type) {
+                // Process thinking mode specific chunks
+                if (part.type === "content" && part.content) {
+                    yield part.content;
+                } else if (part.type === "thought" && part.content) {
+                    yield part as ThinkingChunk;
+                } else if (part.type === "tokens") {
+                    yield part as ThinkingChunk;
+                } else if (part.type === "error") {
+                    throw new Error(part.error || "Unknown error occurred");
+                } else if (part.type === "end") {
+                    break;
+                }
+            } else {
+                try {
+                    yield AgentFlow.fromJsonObject(part);
+                } catch (e) {
+                    console.warn("Received invalid object from chatThinking stream, skipping:", part, e);
                 }
             }
         }

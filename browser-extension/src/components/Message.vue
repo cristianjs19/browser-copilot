@@ -21,7 +21,8 @@ const props = defineProps<{
   agentName: string, 
   agentId: string,
   tokens?: number,
-  thoughtsTokens?: number
+  thoughtsTokens?: number,
+  thoughts?: string
 }>()
 const { t } = useI18n()
 const renderedMsg = computed(() => props.isUser ? props.text.replaceAll('\n', '<br/>') : renderMarkDown(props.text))
@@ -29,6 +30,35 @@ const messageElement = ref<HTMLElement | null>(null);
 const resizeObserver: ResizeObserver = new ResizeObserver(onResize)
 var chart: any;
 var prevWidth: number = 0;
+
+// Thinking mode state
+const isThoughtsExpanded = ref(false)
+const hasThoughts = computed(() => !props.isUser && props.thoughts && props.thoughts.trim().length > 0)
+
+/**
+ * Get titles from all thought steps for collapsed preview
+ */
+const getThoughtsPreview = () => {
+  if (!props.thoughts) return '';
+  
+  // Extract all titles wrapped in ** from the thoughts content
+  const titleRegex = /\*\*(.*?)\*\*/g;
+  const titles = [];
+  let match;
+  
+  while ((match = titleRegex.exec(props.thoughts)) !== null) {
+    titles.push(match[1].trim());
+  }
+  
+  if (titles.length === 0) {
+    // Fallback to first line if no titles found
+    const firstLine = props.thoughts.split('\n')[0];
+    return firstLine.length > 60 ? firstLine.substring(0, 60) + '...' : firstLine;
+  }
+  
+  // Join titles with bullet points
+  return titles.join(' • ');
+};
 
 function renderMarkDown(text: string) {
   let md = new MarkdownIt({
@@ -142,6 +172,48 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div class="mt-2 ml-8 mr-2">
+
+      <!-- Thinking mode UI -->
+      <div v-if="hasThoughts" class="mb-4 border border-gray-600 rounded-lg overflow-hidden">
+        <button
+          @click="isThoughtsExpanded = !isThoughtsExpanded"
+          class="w-full px-4 py-3 text-left bg-gray-700 hover:bg-gray-650 border-b border-gray-600 flex items-center justify-between transition-colors duration-200"
+        >
+          <div class="flex items-center space-x-2">
+            <svg 
+              :class="`w-4 h-4 transition-transform duration-200 ${isThoughtsExpanded ? 'rotate-90' : ''}`"
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+            <span class="text-sm font-medium text-blue-400">Thought Process</span>
+            <div v-if="!isThoughtsExpanded && props.thoughts && !isComplete" class="flex items-center space-x-1 text-blue-400">
+              <div class="flex space-x-1">
+                <div class="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style="animation-delay: 0ms"></div>
+                <div class="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style="animation-delay: 150ms"></div>
+                <div class="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style="animation-delay: 300ms"></div>
+              </div>
+              <span class="text-sm text-blue-400 ml-2">Thinking...</span>
+            </div>
+          </div>
+          <span v-if="thoughtsTokens" class="text-xs text-gray-500">
+            {{ thoughtsTokens }} thinking tokens
+          </span>
+        </button>
+        
+        <div v-if="isThoughtsExpanded" class="px-4 py-3 bg-gray-800 border-t border-gray-600">
+          <div class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
+            {{ props.thoughts }}
+          </div>
+        </div>
+        
+        <div v-if="!isThoughtsExpanded" class="px-4 py-2 bg-gray-750 text-xs text-gray-400 italic">
+          {{ getThoughtsPreview() }}
+        </div>
+      </div>
+
       <div>
         <template v-if="file.data">
           <audio controls>
@@ -153,12 +225,23 @@ onBeforeUnmount(() => {
             class="flex flex-col text-sm font-light leading-tight gap-2 rendered-msg" />
         </template>
       </div>
-      <div class="ml-3 dot-pulse" v-if="!isComplete" />
+      <div class="ml-3 dot-pulse" v-if="!isComplete && !hasThoughts" />
       
       <!-- Token usage information for AI agent responses -->
-      <div v-if="!isUser && isComplete && tokens !== undefined" class="mt-2 text-xs text-gray-500 flex items-center gap-2">
+      <!-- <div v-if="!isUser && isComplete && tokens !== undefined" class="mt-2 text-xs text-gray-500 flex items-center gap-2">
         <span>{{ tokens }} tokens</span>
         <span v-if="thoughtsTokens !== undefined">({{ thoughtsTokens }} thinking)</span>
+      </div> -->
+
+
+      <!-- Token usage Information -->
+      <div v-if="!isUser && tokens" class="token-display mt-2">
+        <div class="flex items-center space-x-2">
+          <span>{{ tokens }} tokens</span>
+          <span v-if="thoughtsTokens" class="text-blue-400">
+            ({{ thoughtsTokens }} thinking)
+          </span>
+        </div>
       </div>
     </div>
   </div>
@@ -224,15 +307,31 @@ div a {
   border-radius: var(--spacing);
   width: fit-content;
 }
+
+/* Thinking mode styles */
+.dot-pulse {
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
 </style>
 
 <i18n>
 {
   "en": {
-    "you": "You"
+    "you": "You",
+    "collapse": "Collapse"
   },
   "es": {
-    "you": "Tú"
+    "you": "Tú",
+    "collapse": "Colapsar"
   }
 }
 </i18n>

@@ -74,11 +74,19 @@ async def answer_question(
     return StreamingResponse(agent_response_stream(req, session), media_type="text/event-stream")
 
 
-@app.post('/sessions/{session_id}/chat')
+@app.post('/sessions/{session_id}/chat-gemini')
 async def chat(
         session_id: str, req: QuestionRequest, user: Annotated[str, Depends(get_current_user)]) -> StreamingResponse:
     session = await _find_session(session_id, user)
-    chunk_generator = chat_response_stream(req, session)
+    chunk_generator = chat_gemini_response_stream(req, session)
+    return StreamingResponse(stream_response_chunks(chunk_generator), media_type="text/event-stream")
+
+
+@app.post('/sessions/{session_id}/thinking-chat-gemini')
+async def chat_thinking(
+        session_id: str, req: QuestionRequest, user: Annotated[str, Depends(get_current_user)]) -> StreamingResponse:
+    session = await _find_session(session_id, user)
+    chunk_generator = chat_thinking_response_stream(req, session)
     return StreamingResponse(stream_response_chunks(chunk_generator), media_type="text/event-stream")
 
 
@@ -108,7 +116,7 @@ async def agent_response_stream(req: QuestionRequest, session: Session) -> Async
         yield ServerSentEvent(event="error").encode()
 
 
-async def chat_response_stream(req: QuestionRequest, session: Session) -> AsyncGenerator[StreamingChunk, None]:
+async def chat_gemini_response_stream(req: QuestionRequest, session: Session) -> AsyncGenerator[StreamingChunk, None]:
     """Generate streaming response using Gemini service"""
     try:
         gemini_service = GeminiService(session)
@@ -125,6 +133,26 @@ async def chat_response_stream(req: QuestionRequest, session: Session) -> AsyncG
         
     except Exception as e:
         logger.error(f"Error in chat_response_stream: {str(e)}")
+        yield StreamingChunk(type="error", error=str(e))
+
+
+async def chat_thinking_response_stream(req: QuestionRequest, session: Session) -> AsyncGenerator[StreamingChunk, None]:
+    """Generate streaming response using Gemini service with thinking mode"""
+    try:
+        gemini_service = GeminiService(session)
+        complete_answer = ""
+        
+        # Generate response using Gemini in thinking mode
+        async for chunk in gemini_service.generate_thinking_response(req.question):
+            if chunk.type == "content" and chunk.content:
+                complete_answer += chunk.content
+            yield chunk
+        
+        question = Question(question=req.question, answer=complete_answer, session=session)
+        await questions_repo.save_question(question)
+        
+    except Exception as e:
+        logger.error(f"Error in chat_thinking_response_stream: {str(e)}")
         yield StreamingChunk(type="error", error=str(e))
 
 

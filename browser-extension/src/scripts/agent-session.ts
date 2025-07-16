@@ -1,9 +1,10 @@
 import browser from "webextension-polyfill"
-import { Agent, AgentRuleCondition, AddHeaderRuleAction, RecordInteractionRuleAction, RequestEvent, TokenResponse } from "./agent"
+import { Agent, AgentRuleCondition, AddHeaderRuleAction, RecordInteractionRuleAction, RequestEvent, TokenResponse, ThinkingChunk } from "./agent"
 import { AuthService } from "./auth"
 import { HttpServiceError, fetchJson } from "./http"
 import { BrowserMessage, InteractionSummary } from "./browser-message"
 import { FlowExecutor } from "./flow"
+import { getUserThinkingModePreference } from "./agent-repository"
 
 // Global streaming controller registry to handle the serialization issue
 class StreamingControllerRegistry {
@@ -170,7 +171,7 @@ export class AgentSession {
     }
   }
 
-  public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void, errorHandler: (error: any) => void) {
+  public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number, thoughts?: string) => void, errorHandler: (error: any) => void) {
     console.log("AgentSession: Starting processUserMessage");
     
     if (!this.id) {
@@ -195,11 +196,20 @@ export class AgentSession {
         text = await this.agent.transcriptAudio(file.data, this.id, this.authService);
       }
       
-      const ret = this.agent.chat(text, this.id, this.authService, signal)
+      // Check if thinking mode is enabled for this agent
+      const thinkingModeEnabled = await getUserThinkingModePreference(this.agent.manifest.id);
+      console.log("AgentSession: Thinking mode enabled:", thinkingModeEnabled);
+      
+      // Use appropriate chat method based on thinking mode
+      const ret = thinkingModeEnabled 
+        ? this.agent.chatThinking(text, this.id, this.authService, signal)
+        : this.agent.chat(text, this.id, this.authService, signal);
+      
       let tokens: number | undefined;
       let thoughtsTokens: number | undefined;
       let hasTokens = false;
       let streamingStopped = false;
+      let thoughts = "";
       
       console.log("AgentSession: Starting to iterate over chat response");
       
@@ -218,6 +228,17 @@ export class AgentSession {
           thoughtsTokens = part.thoughts_tokens;
           hasTokens = true;
           console.log("AgentSession: Captured tokens:", tokens, "thoughtsTokens:", thoughtsTokens);
+        } else if (this.isThinkingChunk(part)) {
+          if (part.type === "thought" && part.content) {
+            thoughts += part.content;
+            // Pass thoughts to handler for real-time display
+            msgHandler("", false, undefined, undefined, thoughts);
+          } else if (part.type === "tokens") {
+            tokens = part.tokens;
+            thoughtsTokens = part.thoughts_tokens;
+            hasTokens = true;
+            console.log("AgentSession: Captured thinking tokens:", tokens, "thoughtsTokens:", thoughtsTokens);
+          }
         } else {
           await new FlowExecutor(this.tabId, msgHandler).runFlow(part.steps)
         }
@@ -233,9 +254,9 @@ export class AgentSession {
       console.log("AgentSession: Streaming completed normally");
       
       if (hasTokens) {
-        msgHandler("", true, tokens, thoughtsTokens)
+        msgHandler("", true, tokens, thoughtsTokens, thoughts || undefined)
       } else {
-        msgHandler("", true)
+        msgHandler("", true, undefined, undefined, thoughts || undefined)
       }
     } catch (e) {
       console.log("AgentSession: Error in processUserMessage:", e);
@@ -257,6 +278,10 @@ export class AgentSession {
 
   private isTokenResponse(obj: any): obj is TokenResponse {
     return typeof obj === "object" && obj.type === "tokens";
+  }
+
+  private isThinkingChunk(obj: any): obj is ThinkingChunk {
+    return typeof obj === "object" && obj.type && ["thought", "tokens"].includes(obj.type);
   }
 
   public async resumeFlow(msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void, errorHandler: (error: any) => void) {
