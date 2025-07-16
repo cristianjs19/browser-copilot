@@ -27,6 +27,116 @@ class StreamingChunk(BaseModel):
     thoughts_tokens: Optional[int] = Field(default=None, description="Thinking tokens count")
     error: Optional[str] = Field(default=None, description="Error message")
 
+
+class TokenCalculator:
+    """Handles token usage calculation and extraction"""
+    
+    def extract_standard_tokens(self, response: Any, message: str, full_response: str) -> int:
+        """
+        Extract token usage from standard response
+        
+        Args:
+            response: Gemini response object
+            message: Original user message
+            full_response: Complete AI response
+            
+        Returns:
+            Total token count
+        """
+        try:
+            if response and hasattr(response, 'usage_metadata'):
+                total_tokens = response.usage_metadata.total_token_count
+                logger.debug(f"Token usage from API: {total_tokens}")
+                return total_tokens
+            else:
+                # Fallback estimation
+                estimated_tokens = len(full_response.split()) + len(message.split())
+                logger.warning(f"API token usage not available, estimated: {estimated_tokens}")
+                return estimated_tokens
+        except Exception as e:
+            # Final fallback
+            estimated_tokens = len(full_response.split()) + len(message.split())
+            logger.error(f"Error extracting token usage, using estimation: {estimated_tokens}. Error: {e}")
+            return estimated_tokens
+
+    def extract_thinking_tokens(
+        self, 
+        response: Any, 
+        message: str, 
+        full_response: str, 
+        full_thoughts: str
+    ) -> tuple[int, int]:
+        """
+        Extract token usage from thinking mode response
+        
+        Args:
+            response: Gemini response object
+            message: Original user message
+            full_response: Complete AI response
+            full_thoughts: Complete thoughts
+            
+        Returns:
+            Tuple of (total_tokens, thoughts_tokens)
+        """
+        try:
+            if response and hasattr(response, 'usage_metadata'):
+                total_tokens = response.usage_metadata.total_token_count
+                thoughts_tokens = getattr(response.usage_metadata, 'thoughts_token_count', 0)
+                logger.debug(f"Thinking token usage from API: total={total_tokens}, thoughts={thoughts_tokens}")
+                return total_tokens, thoughts_tokens
+            else:
+                # Fallback estimation
+                total_estimated = len(full_response.split()) + len(message.split()) + len(full_thoughts.split())
+                thoughts_estimated = len(full_thoughts.split())
+                logger.warning(f"API token usage not available, estimated: total={total_estimated}, thoughts={thoughts_estimated}")
+                return total_estimated, thoughts_estimated
+        except Exception as e:
+            # Final fallback
+            total_estimated = len(full_response.split()) + len(message.split()) + len(full_thoughts.split())
+            thoughts_estimated = len(full_thoughts.split())
+            logger.error(f"Error extracting thinking token usage, using estimation. Error: {e}")
+            return total_estimated, thoughts_estimated
+
+    def create_token_chunk(
+        self,
+        response: Any,
+        message: str,
+        full_response: str,
+        use_thinking: bool = False,
+        full_thoughts: Optional[str] = None
+    ) -> StreamingChunk:
+        """
+        Create token usage streaming chunk based on response mode
+        
+        Args:
+            response: Gemini response object
+            message: Original user message
+            full_response: Complete AI response
+            use_thinking: Whether in thinking mode
+            full_thoughts: Complete thoughts (for thinking mode)
+            
+        Returns:
+            StreamingChunk with token usage
+        """
+        if use_thinking:
+            total_tokens, thoughts_tokens = self.extract_thinking_tokens(
+                response, message, full_response, full_thoughts
+            )
+            return StreamingChunk(
+                type="tokens",
+                tokens=total_tokens,
+                thoughts_tokens=thoughts_tokens
+            )
+        else:
+            total_tokens = self.extract_standard_tokens(
+                response, message, full_response
+            )
+            return StreamingChunk(
+                type="tokens",
+                tokens=total_tokens
+            )
+
+
 class GeminiService:
     """
     Service for interacting with Google Gemini API
@@ -45,6 +155,9 @@ class GeminiService:
             chat_memory=message_history,
             return_messages=True
         )
+        
+        # Initialize token calculator
+        self._token_calculator = TokenCalculator()
         
         # Configuration settings
         self.flash_model = os.getenv("GEMINI_FLASH_MODEL", "gemini-2.5-flash")
@@ -76,72 +189,12 @@ class GeminiService:
         """
         logger.info(f"Starting standard response generation for session {self._session.id}")
         
-        try:
-            # Add user message to memory
-            self._memory.chat_memory.add_user_message(message)
-            
-            # Get conversation history from memory
-            conversation_history = self._get_conversation_history()
-            
-            # Build contents for Gemini API
-            contents = self._build_gemini_contents(conversation_history)
-            
-            logger.debug(f"**Generated contents for Gemini: {contents}**")
-            # Configure generation
-            config = types.GenerateContentConfig(
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                max_output_tokens=self.max_output_tokens
-            )
-            
-            full_response = ""
-            final_response = None
-            
-            # Generate streaming response using Flash model
-            async for chunk in self._generate_content_stream_async(
-                model=self.flash_model,
-                contents=contents,
-                config=config
-            ):
-                final_response = chunk
-                
-                for candidate in chunk.candidates:
-                    if not candidate.content or not candidate.content.parts:
-                        continue
-                    
-                    for part in candidate.content.parts:
-                        if part.text:
-                            response_text = part.text
-                            full_response += response_text
-                            
-                            yield StreamingChunk(
-                                type="content",
-                                content=response_text
-                            )
-                            await asyncio.sleep(self.chunk_delay)
-            
-            # Add AI response to memory
-            self._memory.chat_memory.add_ai_message(full_response)
-            
-            # Extract and yield token usage information
-            total_tokens = self._extract_token_usage(
-                final_response, message, full_response
-            )
-            
-            yield StreamingChunk(
-                type="tokens",
-                tokens=total_tokens
-            )
-            
-            logger.info(f"Completed standard response for session {self._session.id}. Response: {len(full_response)} chars")
-                
-        except Exception as e:
-            logger.error(f"Error in standard response generation for session {self._session.id}: {str(e)}")
-            yield StreamingChunk(
-                type="error",
-                error=str(e)
-            )
+        async for chunk in self._generate_response(
+            message=message,
+            model=self.flash_model,
+            use_thinking=False
+        ):
+            yield chunk
 
     async def generate_thinking_response(
         self,
@@ -158,6 +211,30 @@ class GeminiService:
         """
         logger.info(f"Starting thinking mode response generation for session {self._session.id}")
         
+        async for chunk in self._generate_response(
+            message=message,
+            model=self.pro_model,
+            use_thinking=True
+        ):
+            yield chunk
+
+    async def _generate_response(
+        self,
+        message: str,
+        model: str,
+        use_thinking: bool
+    ) -> AsyncGenerator[StreamingChunk, None]:
+        """
+        Core response generation method
+        
+        Args:
+            message: User message
+            model: Gemini model to use
+            use_thinking: Whether to enable thinking mode
+            
+        Yields:
+            StreamingChunk objects with response content and token usage
+        """
         try:
             # Add user message to memory
             self._memory.chat_memory.add_user_message(message)
@@ -168,24 +245,28 @@ class GeminiService:
             # Build contents for Gemini API
             contents = self._build_gemini_contents(conversation_history)
             
-            # Configure generation with thinking mode
+            if not use_thinking:
+                logger.debug(f"**Generated contents for Gemini: {contents}**")
+            
+            # Configure generation
             config = types.GenerateContentConfig(
                 temperature=self.temperature,
                 top_p=self.top_p,
                 top_k=self.top_k,
-                max_output_tokens=self.max_output_tokens,
-                thinking_config=types.ThinkingConfig(
-                    include_thoughts=True
-                )
+                max_output_tokens=self.max_output_tokens
             )
+            
+            # Add thinking config if needed
+            if use_thinking:
+                config.thinking_config = types.ThinkingConfig(include_thoughts=True)
             
             full_response = ""
             full_thoughts = ""
             final_response = None
             
-            # Generate streaming response using Pro model
+            # Generate streaming response
             async for chunk in self._generate_content_stream_async(
-                model=self.pro_model,
+                model=model,
                 contents=contents,
                 config=config
             ):
@@ -199,8 +280,8 @@ class GeminiService:
                         if not part.text:
                             continue
                         
-                        # Check if this part contains thoughts
-                        if hasattr(part, 'thought') and part.thought:
+                        # Handle thinking mode
+                        if use_thinking and hasattr(part, 'thought') and part.thought:
                             # This is a thought part
                             thought_text = part.text
                             full_thoughts += thought_text
@@ -209,7 +290,6 @@ class GeminiService:
                                 type="thought",
                                 content=thought_text
                             )
-                            await asyncio.sleep(self.chunk_delay)
                         else:
                             # This is regular response content
                             response_text = part.text
@@ -219,26 +299,28 @@ class GeminiService:
                                 type="content",
                                 content=response_text
                             )
-                            await asyncio.sleep(self.chunk_delay)
+                        
+                        await asyncio.sleep(self.chunk_delay)
             
             # Add AI response to memory
             self._memory.chat_memory.add_ai_message(full_response)
             
             # Extract and yield token usage information
-            total_tokens, thoughts_tokens = self._extract_thinking_token_usage(
-                final_response, message, full_response, full_thoughts
+            yield self._token_calculator.create_token_chunk(
+                final_response,
+                message,
+                full_response,
+                use_thinking=use_thinking,
+                full_thoughts=full_thoughts if use_thinking else None
             )
             
-            yield StreamingChunk(
-                type="tokens",
-                tokens=total_tokens,
-                thoughts_tokens=thoughts_tokens
-            )
-            
-            logger.info(f"Completed thinking response for session {self._session.id}. Response: {len(full_response)} chars, Thoughts: {len(full_thoughts)} chars")
+            mode = "thinking" if use_thinking else "standard"
+            logger.info(f"Completed {mode} response for session {self._session.id}. Response: {len(full_response)} chars" + 
+                       (f", Thoughts: {len(full_thoughts)} chars" if use_thinking else ""))
                 
         except Exception as e:
-            logger.error(f"Error in thinking response generation for session {self._session.id}: {str(e)}")
+            mode = "thinking" if use_thinking else "standard"
+            logger.error(f"Error in {mode} response generation for session {self._session.id}: {str(e)}")
             yield StreamingChunk(
                 type="error",
                 error=str(e)
@@ -295,69 +377,3 @@ class GeminiService:
         
         for chunk in generator:
             yield chunk
-
-    def _extract_token_usage(self, response: Any, message: str, full_response: str) -> int:
-        """
-        Extract token usage from standard response
-        
-        Args:
-            response: Gemini response object
-            message: Original user message
-            full_response: Complete AI response
-            
-        Returns:
-            Total token count
-        """
-        try:
-            if response and hasattr(response, 'usage_metadata'):
-                total_tokens = response.usage_metadata.total_token_count
-                logger.debug(f"Token usage from API: {total_tokens}")
-                return total_tokens
-            else:
-                # Fallback estimation
-                estimated_tokens = len(full_response.split()) + len(message.split())
-                logger.warning(f"API token usage not available, estimated: {estimated_tokens}")
-                return estimated_tokens
-        except Exception as e:
-            # Final fallback
-            estimated_tokens = len(full_response.split()) + len(message.split())
-            logger.error(f"Error extracting token usage, using estimation: {estimated_tokens}. Error: {e}")
-            return estimated_tokens
-
-    def _extract_thinking_token_usage(
-        self, 
-        response: Any, 
-        message: str, 
-        full_response: str, 
-        full_thoughts: str
-    ) -> tuple[int, int]:
-        """
-        Extract token usage from thinking mode response
-        
-        Args:
-            response: Gemini response object
-            message: Original user message
-            full_response: Complete AI response
-            full_thoughts: Complete thoughts
-            
-        Returns:
-            Tuple of (total_tokens, thoughts_tokens)
-        """
-        try:
-            if response and hasattr(response, 'usage_metadata'):
-                total_tokens = response.usage_metadata.total_token_count
-                thoughts_tokens = getattr(response.usage_metadata, 'thoughts_token_count', 0)
-                logger.debug(f"Thinking token usage from API: total={total_tokens}, thoughts={thoughts_tokens}")
-                return total_tokens, thoughts_tokens
-            else:
-                # Fallback estimation
-                total_estimated = len(full_response.split()) + len(message.split()) + len(full_thoughts.split())
-                thoughts_estimated = len(full_thoughts.split())
-                logger.warning(f"API token usage not available, estimated: total={total_estimated}, thoughts={thoughts_estimated}")
-                return total_estimated, thoughts_estimated
-        except Exception as e:
-            # Final fallback
-            total_estimated = len(full_response.split()) + len(message.split()) + len(full_thoughts.split())
-            thoughts_estimated = len(full_thoughts.split())
-            logger.error(f"Error extracting thinking token usage, using estimation. Error: {e}")
-            return total_estimated, thoughts_estimated

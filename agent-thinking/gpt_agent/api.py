@@ -6,7 +6,7 @@ from typing import Annotated, AsyncGenerator, AsyncIterator, Optional
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sse_starlette.sse import ServerSentEvent
 
 from gpt_agent.agent import Agent
@@ -71,23 +71,23 @@ async def answer_question(
     # streaming and may take some time to end answering a given response.
     # If you don't want to use response streaming you can just return a pydantic object like in
     # create session endpoint.
-    return StreamingResponse(agent_response_stream(req, session), media_type="text/event-stream")
+    return StreamingResponse(_openai_agent_response_stream(req, session), media_type="text/event-stream")
 
 
 @app.post('/sessions/{session_id}/chat-gemini')
 async def chat(
         session_id: str, req: QuestionRequest, user: Annotated[str, Depends(get_current_user)]) -> StreamingResponse:
     session = await _find_session(session_id, user)
-    chunk_generator = chat_gemini_response_stream(req, session)
-    return StreamingResponse(stream_response_chunks(chunk_generator), media_type="text/event-stream")
+    chunk_generator = _gemini_agent_response_stream(req, session, use_thinking=False)
+    return StreamingResponse(_stream_response_chunks(chunk_generator), media_type="text/event-stream")
 
 
 @app.post('/sessions/{session_id}/thinking-chat-gemini')
 async def chat_thinking(
         session_id: str, req: QuestionRequest, user: Annotated[str, Depends(get_current_user)]) -> StreamingResponse:
     session = await _find_session(session_id, user)
-    chunk_generator = chat_thinking_response_stream(req, session)
-    return StreamingResponse(stream_response_chunks(chunk_generator), media_type="text/event-stream")
+    chunk_generator = _gemini_agent_response_stream(req, session, use_thinking=True)
+    return StreamingResponse(_stream_response_chunks(chunk_generator), media_type="text/event-stream")
 
 
 async def _find_session(session_id: str, user: str) -> Session:
@@ -98,7 +98,7 @@ async def _find_session(session_id: str, user: str) -> Session:
     return ret
 
 
-async def agent_response_stream(req: QuestionRequest, session: Session) -> AsyncIterator[bytes]:
+async def _openai_agent_response_stream(req: QuestionRequest, session: Session) -> AsyncIterator[bytes]:
     try:
         answer_stream = Agent(session).ask(req.question)
         complete_answer = ""
@@ -116,14 +116,19 @@ async def agent_response_stream(req: QuestionRequest, session: Session) -> Async
         yield ServerSentEvent(event="error").encode()
 
 
-async def chat_gemini_response_stream(req: QuestionRequest, session: Session) -> AsyncGenerator[StreamingChunk, None]:
+async def _gemini_agent_response_stream(req: QuestionRequest, session: Session, use_thinking: bool) -> AsyncGenerator[StreamingChunk, None]:
     """Generate streaming response using Gemini service"""
     try:
         gemini_service = GeminiService(session)
         complete_answer = ""
         
-        # Generate response using Gemini
-        async for chunk in gemini_service.generate_standard_response(req.question):
+        # Generate response using appropriate method
+        if use_thinking:
+            response_generator = gemini_service.generate_thinking_response(req.question)
+        else:
+            response_generator = gemini_service.generate_standard_response(req.question)
+        
+        async for chunk in response_generator:
             if chunk.type == "content" and chunk.content:
                 complete_answer += chunk.content
             yield chunk
@@ -132,31 +137,12 @@ async def chat_gemini_response_stream(req: QuestionRequest, session: Session) ->
         await questions_repo.save_question(question)
         
     except Exception as e:
-        logger.error(f"Error in chat_response_stream: {str(e)}")
+        mode = "thinking" if use_thinking else "standard"
+        logger.error(f"Error in {mode} response stream: {str(e)}")
         yield StreamingChunk(type="error", error=str(e))
 
 
-async def chat_thinking_response_stream(req: QuestionRequest, session: Session) -> AsyncGenerator[StreamingChunk, None]:
-    """Generate streaming response using Gemini service with thinking mode"""
-    try:
-        gemini_service = GeminiService(session)
-        complete_answer = ""
-        
-        # Generate response using Gemini in thinking mode
-        async for chunk in gemini_service.generate_thinking_response(req.question):
-            if chunk.type == "content" and chunk.content:
-                complete_answer += chunk.content
-            yield chunk
-        
-        question = Question(question=req.question, answer=complete_answer, session=session)
-        await questions_repo.save_question(question)
-        
-    except Exception as e:
-        logger.error(f"Error in chat_thinking_response_stream: {str(e)}")
-        yield StreamingChunk(type="error", error=str(e))
-
-
-async def stream_response_chunks(
+async def _stream_response_chunks(
     chunk_generator: AsyncGenerator[StreamingChunk, None]
 ) -> AsyncGenerator[str, None]:
     """Convert StreamingChunk objects to Server-Sent Events format."""
