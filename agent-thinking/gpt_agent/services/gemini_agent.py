@@ -10,22 +10,12 @@ from typing import Any, AsyncGenerator, List, Optional
 
 from google import genai
 from google.genai import types
+from gpt_agent.domain import Session, StreamingChunk
+from gpt_agent.file_system_repos import get_session_path
 from langchain.memory import ConversationBufferMemory, FileChatMessageHistory
 from langchain.schema import AIMessage, BaseMessage, HumanMessage
-from pydantic import BaseModel, Field
-
-from gpt_agent.domain import Session
-from gpt_agent.file_system_repos import get_session_path
 
 logger = logging.getLogger(__name__)
-
-class StreamingChunk(BaseModel):
-    """Streaming response chunk model"""
-    type: str = Field(..., description="Chunk type: content, thought, tokens, end, error")
-    content: Optional[str] = Field(default=None, description="Chunk content")
-    tokens: Optional[int] = Field(default=None, description="Total token count")
-    thoughts_tokens: Optional[int] = Field(default=None, description="Thinking tokens count")
-    error: Optional[str] = Field(default=None, description="Error message")
 
 
 class TokenCalculator:

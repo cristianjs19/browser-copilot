@@ -20,21 +20,18 @@ const validation = ref(ValidationResult.valid())
 const save = async () => {
   try {
     let agent = await Agent.fromUrl(url.value)
-    console.log(`Adding agent from ${url.value}`, agent);
-    console.log("Agent capabilities:", agent.manifest.capabilities);
     
     await addAgent(agent)
     await saveAgentPrompts(agent.manifest.prompts, agent.manifest.id)
     
     // Store thinking mode capability if present in capabilities array
     const hasThinkingMode = agent.manifest.capabilities?.includes('has_thinking_mode') || false
-    console.log("hasThinkingMode check result:", hasThinkingMode);
     
     if (hasThinkingMode) {
-      console.log("YES IT HAS THINKING MODE");
+      console.log(`Agent USING thinking mode`);
       await setAgentThinkingMode(agent.manifest.id, true)
     } else {
-      console.log("NO THINKING MODE CAPABILITY FOUND");
+      console.log(`Agent NOT using thinking mode`);
       await setAgentThinkingMode(agent.manifest.id, false)
     }
     

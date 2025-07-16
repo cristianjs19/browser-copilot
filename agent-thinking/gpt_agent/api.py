@@ -1,23 +1,28 @@
 import logging
 import os
 import traceback
-from typing import Annotated, AsyncGenerator, AsyncIterator, Optional
+from typing import Annotated, AsyncGenerator, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from sse_starlette.sse import ServerSentEvent
 
-from gpt_agent.agent import Agent
 from gpt_agent.auth import get_current_user
-from gpt_agent.domain import Question, Session, SessionBase, TranscriptionQuestion
+from gpt_agent.domain import (
+    Question,
+    Session,
+    SessionBase,
+    StreamingChunk,
+    TranscriptionQuestion,
+)
 from gpt_agent.file_system_repos import (
     QuestionsRepository,
     SessionsRepository,
     TranscriptionsRepository,
 )
-from gpt_agent.gemini import GeminiService, StreamingChunk
+from gpt_agent.services.gemini_agent import GeminiService
+from gpt_agent.services.openai_agent import Agent
 
 logging.basicConfig()
 logger = logging.getLogger("gpt_agent")
@@ -69,9 +74,9 @@ async def answer_question(
     # This copilot uses response streaming which allows users to start get a response as soon as
     # possible, which is particularly important when interacting with LLMs that support response
     # streaming and may take some time to end answering a given response.
-    # If you don't want to use response streaming you can just return a pydantic object like in
-    # create session endpoint.
-    return StreamingResponse(_openai_agent_response_stream(req, session), media_type="text/event-stream")
+    # Updated to use StreamingChunk format for consistency with Gemini endpoints
+    chunk_generator = _openai_agent_response_stream(req, session)
+    return StreamingResponse(_stream_response_chunks(chunk_generator), media_type="text/event-stream")
 
 
 @app.post('/sessions/{session_id}/chat-gemini')
@@ -98,48 +103,54 @@ async def _find_session(session_id: str, user: str) -> Session:
     return ret
 
 
-async def _openai_agent_response_stream(req: QuestionRequest, session: Session) -> AsyncIterator[bytes]:
+async def _create_response_stream(
+    request: QuestionRequest,
+    session: Session,
+    response_generator_func
+) -> AsyncGenerator[StreamingChunk, None]:
+    """
+    Common response stream handler that eliminates code duplication.
+    Handles the common pattern: create service/agent -> generate response -> save to repository
+    """
     try:
-        answer_stream = Agent(session).ask(req.question)
-        complete_answer = ""
-        async for token in answer_stream:
-            if isinstance(token, str):
-                complete_answer = complete_answer + token
-                yield ServerSentEvent(data=token).encode()
-            else:
-                complete_answer = complete_answer + token.model_dump_json()
-                yield ServerSentEvent(event="flow", data=token.model_dump_json()).encode()
-        ret = Question(question=req.question, answer=complete_answer, session=session)
-        await questions_repo.save_question(ret)
-    except Exception as e:
-        traceback.print_exception(e)
-        yield ServerSentEvent(event="error").encode()
-
-
-async def _gemini_agent_response_stream(req: QuestionRequest, session: Session, use_thinking: bool) -> AsyncGenerator[StreamingChunk, None]:
-    """Generate streaming response using Gemini service"""
-    try:
-        gemini_service = GeminiService(session)
         complete_answer = ""
         
-        # Generate response using appropriate method
-        if use_thinking:
-            response_generator = gemini_service.generate_thinking_response(req.question)
-        else:
-            response_generator = gemini_service.generate_standard_response(req.question)
-        
-        async for chunk in response_generator:
+        # Generate response using the provided generator function
+        async for chunk in response_generator_func(request.question):
             if chunk.type == "content" and chunk.content:
                 complete_answer += chunk.content
             yield chunk
         
-        question = Question(question=req.question, answer=complete_answer, session=session)
+        # Save the question and answer to repository
+        question = Question(question=request.question, answer=complete_answer, session=session)
         await questions_repo.save_question(question)
         
     except Exception as e:
-        mode = "thinking" if use_thinking else "standard"
-        logger.error(f"Error in {mode} response stream: {str(e)}")
+        logger.error(f"Error in response stream: {str(e)}")
         yield StreamingChunk(type="error", error=str(e))
+
+
+async def _openai_agent_response_stream(req: QuestionRequest, session: Session) -> AsyncGenerator[StreamingChunk, None]:
+    """Generate streaming response using OpenAI agent with StreamingChunk format"""
+    def create_openai_generator(question: str):
+        agent = Agent(session)
+        return agent.ask_with_streaming_chunks(question)
+    
+    async for chunk in _create_response_stream(req, session, create_openai_generator):
+        yield chunk
+
+
+async def _gemini_agent_response_stream(req: QuestionRequest, session: Session, use_thinking: bool) -> AsyncGenerator[StreamingChunk, None]:
+    """Generate streaming response using Gemini service"""
+    def create_gemini_generator(question: str):
+        gemini_service = GeminiService(session)
+        if use_thinking:
+            return gemini_service.generate_thinking_response(question)
+        else:
+            return gemini_service.generate_standard_response(question)
+    
+    async for chunk in _create_response_stream(req, session, create_gemini_generator):
+        yield chunk
 
 
 async def _stream_response_chunks(

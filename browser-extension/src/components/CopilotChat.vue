@@ -78,7 +78,7 @@ const lastMessage = computed((): ChatMessage => props.messages[props.messages.le
           <AlertNotification 
             :show="showInterruptedAlert" 
             :message="t('responseInterrupted')" 
-            :auto-hide-delay="3000"
+            :auto-hide-delay="4000"
             type="error"
             @close="onCloseAlert" 
           />

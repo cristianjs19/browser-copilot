@@ -1,7 +1,16 @@
 import uuid
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+
+class StreamingChunk(BaseModel):
+    """Streaming response chunk model - core domain object for all streaming responses"""
+    type: str = Field(..., description="Chunk type: content, thought, tokens, end, error")
+    content: Optional[str] = Field(default=None, description="Chunk content")
+    tokens: Optional[int] = Field(default=None, description="Total token count")
+    thoughts_tokens: Optional[int] = Field(default=None, description="Thinking tokens count")
+    error: Optional[str] = Field(default=None, description="Error message")
 
 
 class SessionBase(BaseModel):

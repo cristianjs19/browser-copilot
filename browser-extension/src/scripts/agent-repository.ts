@@ -48,7 +48,6 @@ export const getAgentThinkingMode = async (agentId: string): Promise<boolean> =>
   const key = `agent_thinking_mode_${agentId}`
   const result = await browser.storage.local.get(key)
   const hasThinkingMode = result[key] || false
-  console.log(`Getting thinking mode for agent ${agentId}: ${hasThinkingMode} (key: ${key})`);
   return hasThinkingMode
 }
 

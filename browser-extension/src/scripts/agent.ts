@@ -89,95 +89,110 @@ export class Agent {
             .flatMap(r => r.actions) : []
     }
 
-    public async * ask(msg: string, sessionId: string, authService?: AuthService): AsyncIterable<string | AgentFlow> {
-        const ret = await fetchStreamJson(`${this.sessionUrl(sessionId)}/questions`, await this.buildHttpPost({ question: msg }, authService))
+    /**
+     * Common streaming method that handles the shared logic for all endpoint types
+     */
+    private async * streamFromEndpoint<T>(
+        endpoint: string,
+        msg: string,
+        authService?: AuthService,
+        abortSignal?: AbortSignal,
+        chunkProcessor?: (part: any) => T | string | null
+    ): AsyncIterable<T | string | AgentFlow> {
+        const options = await this.buildHttpPost({ question: msg }, authService)
+        
+        if (abortSignal) {
+            options.signal = abortSignal
+        }
+        
+        const ret = await fetchStreamJson(`${this.sessionUrl("")}${endpoint}`, options)
+        
         for await (const part of ret) {
+            if (abortSignal?.aborted) {
+                console.log(`Agent.${endpoint}: Stream cancelled by AbortSignal`);
+                break;
+            }
+            
             if (typeof part === "string") {
-                yield part
+                yield part;
+            } else if (part && typeof part === "object" && part.type) {
+                // Use custom processor if provided, otherwise use default logic
+                if (chunkProcessor) {
+                    const processed = chunkProcessor(part);
+                    if (processed !== null) {
+                        yield processed as T | string;
+                    }
+                } else {
+                    // Default processing for content and errors
+                    if (part.type === "content" && part.content) {
+                        yield part.content;
+                    } else if (part.type === "error") {
+                        throw new Error(part.error || "Unknown error occurred");
+                    } else if (part.type === "end") {
+                        break;
+                    }
+                }
             } else {
-                yield AgentFlow.fromJsonObject(part)
+                try {
+                    yield AgentFlow.fromJsonObject(part);
+                } catch (e) {
+                    console.warn(`Received invalid object from ${endpoint} stream, skipping:`, part, e);
+                }
             }
         }
+    }
+
+    public async * ask(msg: string, sessionId: string, authService?: AuthService, abortSignal?: AbortSignal): AsyncIterable<string | TokenResponse | AgentFlow> {
+        const chunkProcessor = (part: any): TokenResponse | string | null => {
+            if (part.type === "content" && part.content) {
+                return part.content;
+            } else if (part.type === "tokens") {
+                return part as TokenResponse;
+            } else if (part.type === "error") {
+                throw new Error(part.error || "Unknown error occurred");
+            } else if (part.type === "end") {
+                return null; // Signal to break
+            }
+            return null;
+        };
+
+        yield* this.streamFromEndpoint(`/sessions/${sessionId}/questions`, msg, authService, abortSignal, chunkProcessor);
     }
 
     public async * chat(msg: string, sessionId: string, authService?: AuthService, abortSignal?: AbortSignal): AsyncIterable<string | TokenResponse | AgentFlow> {
-        const options = await this.buildHttpPost({ question: msg }, authService)
-        
-        // Add abort signal if provided
-        if (abortSignal) {
-            options.signal = abortSignal
-        }
-        
-        const ret = await fetchStreamJson(`${this.sessionUrl(sessionId)}/chat-gemini`, options)
-        for await (const part of ret) {
-            // Check if aborted before processing each part
-            if (abortSignal?.aborted) {
-                console.log("Agent.chat: Stream cancelled by AbortSignal");
-                break;
+        const chunkProcessor = (part: any): TokenResponse | string | null => {
+            if (part.type === "content" && part.content) {
+                return part.content;
+            } else if (part.type === "tokens") {
+                return part as TokenResponse;
+            } else if (part.type === "error") {
+                throw new Error(part.error || "Unknown error occurred");
+            } else if (part.type === "end") {
+                return null; // Signal to break
             }
-            
-            if (typeof part === "string") {
-                yield part;
-            } else if (part && typeof part === "object" && part.type) {
-                // Only process objects that have a valid type property
-                if (part.type === "content" && part.content) {
-                    yield part.content;
-                } else if (part.type === "tokens") {
-                    yield part as TokenResponse;
-                } else if (part.type === "error") {
-                    throw new Error(part.error || "Unknown error occurred");
-                } else if (part.type === "end") {
-                    break;
-                }
-            } else {
-                try {
-                    yield AgentFlow.fromJsonObject(part);
-                } catch (e) {
-                    console.warn("Received invalid object from chat stream, skipping:", part, e);
-                }
-            }
-        }
+            return null;
+        };
+
+        yield* this.streamFromEndpoint(`/sessions/${sessionId}/chat-gemini`, msg, authService, abortSignal, chunkProcessor);
     }
 
     public async * chatThinking(msg: string, sessionId: string, authService?: AuthService, abortSignal?: AbortSignal): AsyncIterable<string | ThinkingChunk | AgentFlow> {
-        const options = await this.buildHttpPost({ question: msg }, authService)
-        
-        // Add abort signal if provided
-        if (abortSignal) {
-            options.signal = abortSignal
-        }
-        
-        const ret = await fetchStreamJson(`${this.sessionUrl(sessionId)}/thinking-chat-gemini`, options)
-        for await (const part of ret) {
-            // Check if aborted before processing each part
-            if (abortSignal?.aborted) {
-                console.log("Agent.chatThinking: Stream cancelled by AbortSignal");
-                break;
+        const chunkProcessor = (part: any): ThinkingChunk | string | null => {
+            if (part.type === "content" && part.content) {
+                return part.content;
+            } else if (part.type === "thought" && part.content) {
+                return part as ThinkingChunk;
+            } else if (part.type === "tokens") {
+                return part as ThinkingChunk;
+            } else if (part.type === "error") {
+                throw new Error(part.error || "Unknown error occurred");
+            } else if (part.type === "end") {
+                return null; // Signal to break
             }
-            
-            if (typeof part === "string") {
-                yield part;
-            } else if (part && typeof part === "object" && part.type) {
-                // Process thinking mode specific chunks
-                if (part.type === "content" && part.content) {
-                    yield part.content;
-                } else if (part.type === "thought" && part.content) {
-                    yield part as ThinkingChunk;
-                } else if (part.type === "tokens") {
-                    yield part as ThinkingChunk;
-                } else if (part.type === "error") {
-                    throw new Error(part.error || "Unknown error occurred");
-                } else if (part.type === "end") {
-                    break;
-                }
-            } else {
-                try {
-                    yield AgentFlow.fromJsonObject(part);
-                } catch (e) {
-                    console.warn("Received invalid object from chatThinking stream, skipping:", part, e);
-                }
-            }
-        }
+            return null;
+        };
+
+        yield* this.streamFromEndpoint(`/sessions/${sessionId}/thinking-chat-gemini`, msg, authService, abortSignal, chunkProcessor);
     }
 
     private sessionUrl(sessionId: string): string {

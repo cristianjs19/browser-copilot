@@ -3,22 +3,22 @@ import datetime
 import enum
 import logging
 import os
-from typing import List, AsyncIterator, Optional
-from pydantic import BaseModel
+from typing import AsyncGenerator, AsyncIterator, List, Optional
 
-from langchain.agents import Tool, OpenAIFunctionsAgent, AgentExecutor
+from gpt_agent.domain import Session, StreamingChunk
+from gpt_agent.file_system_repos import get_session_path
+from langchain.agents import AgentExecutor, OpenAIFunctionsAgent, Tool
 from langchain.callbacks import AsyncIteratorCallbackHandler
 from langchain.memory import ConversationBufferMemory, FileChatMessageHistory
 from langchain.prompts import MessagesPlaceholder
 from langchain.schema import SystemMessage
 from langchain.tools import tool
 from langchain_community.chat_models import AzureChatOpenAI, ChatOpenAI
-from openai import OpenAI, AzureOpenAI
-
-from gpt_agent.domain import Session
-from gpt_agent.file_system_repos import get_session_path
+from openai import AzureOpenAI, OpenAI
+from pydantic import BaseModel
 
 logging.getLogger("openai").level = logging.DEBUG
+logger = logging.getLogger(__name__)
 
 
 # just a sample tool to showcase how you can create your own set of tools
@@ -59,6 +59,28 @@ def contact_abstracta(full_name: str) -> str:
         AgentStep(action=AgentAction.FILL, selector='#fullname', value=full_name),
         AgentStep(action=AgentAction.MESSAGE, value="I have filled the contact form with your name.")
     ]).model_dump_json()
+
+
+class TokenUsageTracker:
+    """Tracks token usage for OpenAI API calls"""
+    
+    def __init__(self):
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+    
+    def update_from_response(self, response):
+        """Update token usage from OpenAI response"""
+        if hasattr(response, 'usage') and response.usage:
+            self.prompt_tokens += response.usage.prompt_tokens
+            self.completion_tokens += response.usage.completion_tokens
+            self.total_tokens += response.usage.total_tokens
+    
+    def calculate_tokens(self, question: str, full_response: str) -> int:
+        """Calculate total tokens using word-based estimation"""
+        words_input = len(question.split())
+        words_output = len(full_response.split())
+        return max(1, int((words_input + words_output) * 0.75))
 
 
 class Agent:
@@ -118,6 +140,7 @@ class Agent:
         return ret.text
 
     async def ask(self, question: str) -> AsyncIterator[AgentFlow | str]:
+        """Legacy method for backward compatibility"""
         callback = AsyncIteratorCallbackHandler()
         task = asyncio.create_task(self._agent.arun(input=question, callbacks=[callback]))
         resp = ""
@@ -135,3 +158,68 @@ class Agent:
                     logging.exception("Error parsing agent response", e)
                     yield ret
             yield ret
+
+    async def ask_with_streaming_chunks(self, question: str) -> AsyncGenerator[StreamingChunk, None]:
+        """
+        New method that uses StreamingChunk format for consistent response structure
+        """
+        try:
+            callback = AsyncIteratorCallbackHandler()
+            task = asyncio.create_task(self._agent.arun(input=question, callbacks=[callback]))
+            
+            full_response = ""
+            final_result = None
+            
+            # Stream the response tokens
+            async for token in callback.aiter():
+                full_response += token
+                yield StreamingChunk(
+                    type="content",
+                    content=token
+                )
+            
+            # Wait for the task to complete to get final result and any tool outputs
+            final_result = await task
+            
+            # Handle tool outputs if different from streamed response
+            if final_result != full_response:
+                if final_result.startswith("{\"steps\":"):
+                    try:
+                        AgentFlow.model_validate_json(final_result)
+                        # For tool outputs, we don't stream individual tokens
+                        yield StreamingChunk(
+                            type="content",
+                            content=final_result
+                        )
+                    except Exception as e:
+                        logging.exception("Error parsing agent response", e)
+                        yield StreamingChunk(
+                            type="content",
+                            content=final_result
+                        )
+                else:
+                    yield StreamingChunk(
+                        type="content",
+                        content=final_result
+                    )
+            
+            # Calculate token usage using TokenUsageTracker (2 lines max)
+            token_tracker = TokenUsageTracker()
+            estimated_tokens = token_tracker.calculate_tokens(question, full_response)
+            
+            # Yield token usage information
+            yield StreamingChunk(
+                type="tokens",
+                tokens=estimated_tokens
+            )
+            
+            logger.info(f"Completed OpenAI response for session {self._session.id}. " +
+                       f"Question: {len(question.split())} words, Response: {len(full_response.split())} words, " +
+                       f"Estimated tokens: {estimated_tokens}")
+                
+        except Exception as e:
+            logger.error(f"Error in OpenAI response generation for session {self._session.id}: {str(e)}")
+            yield StreamingChunk(
+                type="error",
+                error=str(e)
+            )

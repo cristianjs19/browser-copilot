@@ -167,20 +167,13 @@ const onUserMessage = async (text: string, file: Record<string, string>) => {
 }
 
 const onStopStreaming = async () => {
-  console.log("Index.vue: onStopStreaming called");
   const agentSession = await findAgentSession(await getCurrentTabId())
-  console.log("Index.vue: Found agent session:", agentSession);
   
   if (agentSession) {
-    console.log("Index.vue: Calling stopStreaming on agent session");
     agentSession.stopStreaming()
-    
-    // Add interrupted message
     const lastMessage = messages.value[messages.value.length - 1]
-    console.log("Index.vue: Last message before interruption:", lastMessage);
     
     if (!lastMessage.isComplete) {
-      console.log("Index.vue: Adding interrupted message");
       lastMessage.isComplete = true
       lastMessage.isSuccess = false
     }

@@ -30,13 +30,10 @@ let recordingStream: MediaStream
 let mediaRecorder: MediaRecorder
 
 onMounted(async () => {
-  console.log("ChatInput: Checking thinking mode for agent:", props.agentId);
   hasThinkingMode.value = await getAgentThinkingMode(props.agentId)
-  console.log("ChatInput: hasThinkingMode result:", hasThinkingMode.value);
   
   if (hasThinkingMode.value) {
     thinkingModeEnabled.value = await getUserThinkingModePreference(props.agentId)
-    console.log("ChatInput: thinkingModeEnabled from preferences:", thinkingModeEnabled.value);
   }
 })
 

@@ -1,5 +1,6 @@
 import browser from "webextension-polyfill"
 import { Agent, AgentRuleCondition, AddHeaderRuleAction, RecordInteractionRuleAction, RequestEvent, TokenResponse, ThinkingChunk } from "./agent"
+import { AgentFlow } from "./flow"
 import { AuthService } from "./auth"
 import { HttpServiceError, fetchJson } from "./http"
 import { BrowserMessage, InteractionSummary } from "./browser-message"
@@ -11,18 +12,15 @@ class StreamingControllerRegistry {
   private static controllers: Map<string, AbortController> = new Map()
   
   static setController(sessionId: string, controller: AbortController) {
-    console.log(`StreamingRegistry: Setting controller for session ${sessionId}`);
     this.controllers.set(sessionId, controller)
   }
   
   static getController(sessionId: string): AbortController | undefined {
     const controller = this.controllers.get(sessionId)
-    console.log(`StreamingRegistry: Getting controller for session ${sessionId}:`, controller);
     return controller
   }
   
   static removeController(sessionId: string) {
-    console.log(`StreamingRegistry: Removing controller for session ${sessionId}`);
     this.controllers.delete(sessionId)
   }
   
@@ -172,7 +170,6 @@ export class AgentSession {
   }
 
   public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number, thoughts?: string) => void, errorHandler: (error: any) => void) {
-    console.log("AgentSession: Starting processUserMessage");
     
     if (!this.id) {
       console.error("AgentSession: No session ID available");
@@ -186,7 +183,6 @@ export class AgentSession {
     // Create new controller for this streaming operation
     const streamingController = new AbortController()
     const signal = streamingController.signal
-    console.log("AgentSession: Created new AbortController", streamingController);
     
     // Store the controller in the registry
     StreamingControllerRegistry.setController(this.id, streamingController);
@@ -196,14 +192,23 @@ export class AgentSession {
         text = await this.agent.transcriptAudio(file.data, this.id, this.authService);
       }
       
-      // Check if thinking mode is enabled for this agent
-      const thinkingModeEnabled = await getUserThinkingModePreference(this.agent.manifest.id);
-      console.log("AgentSession: Thinking mode enabled:", thinkingModeEnabled);
+      // Check if agent has thinking mode capability
+      const hasThinkingMode = this.agent.manifest.capabilities?.includes('has_thinking_mode') || false;
       
-      // Use appropriate chat method based on thinking mode
-      const ret = thinkingModeEnabled 
-        ? this.agent.chatThinking(text, this.id, this.authService, signal)
-        : this.agent.chat(text, this.id, this.authService, signal);
+      let ret: AsyncIterable<string | TokenResponse | ThinkingChunk | AgentFlow>;
+      
+      if (hasThinkingMode) {
+        // Check if thinking mode is enabled for this agent
+        const thinkingModeEnabled = await getUserThinkingModePreference(this.agent.manifest.id);
+        
+        // Use appropriate chat method based on thinking mode
+        ret = thinkingModeEnabled 
+          ? this.agent.chatThinking(text, this.id, this.authService, signal)
+          : this.agent.chat(text, this.id, this.authService, signal);
+      } else {
+        // Use the ask method for agents without thinking mode capability
+        ret = this.agent.ask(text, this.id, this.authService, signal);
+      }
       
       let tokens: number | undefined;
       let thoughtsTokens: number | undefined;
@@ -211,12 +216,8 @@ export class AgentSession {
       let streamingStopped = false;
       let thoughts = "";
       
-      console.log("AgentSession: Starting to iterate over chat response");
-      
       for await (const part of ret) {
-        // Check if streaming was cancelled
         if (signal.aborted) {
-          console.log("AgentSession: Streaming was cancelled, breaking out of loop");
           streamingStopped = true;
           break;
         }
@@ -227,17 +228,14 @@ export class AgentSession {
           tokens = part.tokens;
           thoughtsTokens = part.thoughts_tokens;
           hasTokens = true;
-          console.log("AgentSession: Captured tokens:", tokens, "thoughtsTokens:", thoughtsTokens);
         } else if (this.isThinkingChunk(part)) {
           if (part.type === "thought" && part.content) {
             thoughts += part.content;
-            // Pass thoughts to handler for real-time display
             msgHandler("", false, undefined, undefined, thoughts);
           } else if (part.type === "tokens") {
             tokens = part.tokens;
             thoughtsTokens = part.thoughts_tokens;
             hasTokens = true;
-            console.log("AgentSession: Captured thinking tokens:", tokens, "thoughtsTokens:", thoughtsTokens);
           }
         } else {
           await new FlowExecutor(this.tabId, msgHandler).runFlow(part.steps)
@@ -246,13 +244,11 @@ export class AgentSession {
       
       if (streamingStopped) {
         console.log("AgentSession: Stream was stopped by user");
-        // Show interrupted message
         msgHandler("", true);
         return;
       }
       
-      console.log("AgentSession: Streaming completed normally");
-      
+      // Send final message with token information
       if (hasTokens) {
         msgHandler("", true, tokens, thoughtsTokens, thoughts || undefined)
       } else {
@@ -262,13 +258,11 @@ export class AgentSession {
       console.log("AgentSession: Error in processUserMessage:", e);
       if (signal.aborted) {
         console.log("AgentSession: Error was due to abort signal");
-        // Stream was cancelled, show interrupted message
         msgHandler("", true);
       } else {
         errorHandler(e)
       }
-    } finally {
-      console.log("AgentSession: Cleaning up streaming controller");
+    } finally {;
       // Clean up the controller from registry
       if (this.id) {
         StreamingControllerRegistry.removeController(this.id);
@@ -324,7 +318,6 @@ export class AgentSession {
   }
 
   public stopStreaming() {
-    console.log("AgentSession: stopStreaming called for session:", this.id);
     if (this.id) {
       const success = StreamingControllerRegistry.abortStreaming(this.id);
       if (success) {
