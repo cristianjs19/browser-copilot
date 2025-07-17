@@ -119,7 +119,7 @@ class Agent:
 
     @staticmethod
     def _is_azure(base_url: str) -> bool:
-        return base_url and ".openai.azure.com" in base_url
+        return base_url is not None and ".openai.azure.com" in base_url
 
     def start_session(self):
         self._memory.chat_memory.add_user_message("this is my locale: " + self._session.locales[0])
