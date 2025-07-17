@@ -1,9 +1,41 @@
 import browser from "webextension-polyfill"
-import { Agent, AgentRuleCondition, AddHeaderRuleAction, RecordInteractionRuleAction, RequestEvent } from "./agent"
+import { Agent, AgentRuleCondition, AddHeaderRuleAction, RecordInteractionRuleAction, RequestEvent, TokenResponse, ThinkingChunk } from "./agent"
+import { AgentFlow } from "./flow"
 import { AuthService } from "./auth"
 import { HttpServiceError, fetchJson } from "./http"
 import { BrowserMessage, InteractionSummary } from "./browser-message"
 import { FlowExecutor } from "./flow"
+import { getUserThinkingModePreference } from "./agent-repository"
+
+// Global streaming controller registry to handle the serialization issue
+class StreamingControllerRegistry {
+  private static controllers: Map<string, AbortController> = new Map()
+  
+  static setController(sessionId: string, controller: AbortController) {
+    this.controllers.set(sessionId, controller)
+  }
+  
+  static getController(sessionId: string): AbortController | undefined {
+    const controller = this.controllers.get(sessionId)
+    return controller
+  }
+  
+  static removeController(sessionId: string) {
+    this.controllers.delete(sessionId)
+  }
+  
+  static abortStreaming(sessionId: string): boolean {
+    const controller = this.controllers.get(sessionId)
+    if (controller) {
+      console.log(`StreamingRegistry: Aborting streaming for session ${sessionId}`);
+      controller.abort()
+      this.controllers.delete(sessionId)
+      return true
+    }
+    console.log(`StreamingRegistry: No controller found for session ${sessionId}`);
+    return false
+  }
+}
 
 export class AgentSession {
   tabId: number
@@ -137,26 +169,116 @@ export class AgentSession {
     }
   }
 
-  public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean) => void, errorHandler: (error: any) => void) {
+  public async processUserMessage(text: string, file: Record<string, string>, msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number, thoughts?: string) => void, errorHandler: (error: any) => void) {
+    
+    if (!this.id) {
+      console.error("AgentSession: No session ID available");
+      errorHandler(new Error("No session ID available"));
+      return;
+    }
+    
+    // Cancel any existing streaming for this session
+    StreamingControllerRegistry.abortStreaming(this.id);
+    
+    // Create new controller for this streaming operation
+    const streamingController = new AbortController()
+    const signal = streamingController.signal
+    
+    // Store the controller in the registry
+    StreamingControllerRegistry.setController(this.id, streamingController);
+    
     try {
       if (file.data) {
-        text = await this.agent.transcriptAudio(file.data, this.id!, this.authService);
+        text = await this.agent.transcriptAudio(file.data, this.id, this.authService);
       }
-      const ret = this.agent.ask(text, this.id!, this.authService)
+      
+      // Check if agent has thinking mode capability
+      const hasThinkingMode = this.agent.manifest.capabilities?.includes('has_thinking_mode') || false;
+      
+      let ret: AsyncIterable<string | TokenResponse | ThinkingChunk | AgentFlow>;
+      
+      if (hasThinkingMode) {
+        // Check if thinking mode is enabled for this agent
+        const thinkingModeEnabled = await getUserThinkingModePreference(this.agent.manifest.id);
+        
+        // Use appropriate chat method based on thinking mode
+        ret = thinkingModeEnabled 
+          ? this.agent.chatThinking(text, this.id, this.authService, signal)
+          : this.agent.chat(text, this.id, this.authService, signal);
+      } else {
+        // Use the ask method for agents without thinking mode capability
+        ret = this.agent.ask(text, this.id, this.authService, signal);
+      }
+      
+      let tokens: number | undefined;
+      let thoughtsTokens: number | undefined;
+      let hasTokens = false;
+      let streamingStopped = false;
+      let thoughts = "";
+      
       for await (const part of ret) {
+        if (signal.aborted) {
+          streamingStopped = true;
+          break;
+        }
+        
         if (typeof part === "string") {
           msgHandler(part, false)
+        } else if (this.isTokenResponse(part)) {
+          tokens = part.tokens;
+          thoughtsTokens = part.thoughts_tokens;
+          hasTokens = true;
+        } else if (this.isThinkingChunk(part)) {
+          if (part.type === "thought" && part.content) {
+            thoughts += part.content;
+            msgHandler("", false, undefined, undefined, thoughts);
+          } else if (part.type === "tokens") {
+            tokens = part.tokens;
+            thoughtsTokens = part.thoughts_tokens;
+            hasTokens = true;
+          }
         } else {
           await new FlowExecutor(this.tabId, msgHandler).runFlow(part.steps)
         }
       }
-      msgHandler("", true)
+      
+      if (streamingStopped) {
+        console.log("AgentSession: Stream was stopped by user");
+        msgHandler("", true);
+        return;
+      }
+      
+      // Send final message with token information
+      if (hasTokens) {
+        msgHandler("", true, tokens, thoughtsTokens, thoughts || undefined)
+      } else {
+        msgHandler("", true, undefined, undefined, thoughts || undefined)
+      }
     } catch (e) {
-      errorHandler(e)
+      console.log("AgentSession: Error in processUserMessage:", e);
+      if (signal.aborted) {
+        console.log("AgentSession: Error was due to abort signal");
+        msgHandler("", true);
+      } else {
+        errorHandler(e)
+      }
+    } finally {;
+      // Clean up the controller from registry
+      if (this.id) {
+        StreamingControllerRegistry.removeController(this.id);
+      }
     }
   }
 
-  public async resumeFlow(msgHandler: (text: string, complete: boolean) => void, errorHandler: (error: any) => void) {
+  private isTokenResponse(obj: any): obj is TokenResponse {
+    return typeof obj === "object" && obj.type === "tokens";
+  }
+
+  private isThinkingChunk(obj: any): obj is ThinkingChunk {
+    return typeof obj === "object" && obj.type && ["thought", "tokens"].includes(obj.type);
+  }
+
+  public async resumeFlow(msgHandler: (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number) => void, errorHandler: (error: any) => void) {
     try {
       await new FlowExecutor(this.tabId, msgHandler).resumeFlow()
     } catch (e) {
@@ -167,6 +289,12 @@ export class AgentSession {
   public async close() {
     await this.removeRequestRules()
     await this.stopPolling()
+    
+    // Clean up any streaming controllers
+    if (this.id) {
+      StreamingControllerRegistry.abortStreaming(this.id);
+    }
+    
     try {
       const endAction = this.agent.manifest.onSessionClose
       if (endAction) {
@@ -186,6 +314,19 @@ export class AgentSession {
   private async stopPolling() {
     if (this.pollId) {
       clearInterval(this.pollId)
+    }
+  }
+
+  public stopStreaming() {
+    if (this.id) {
+      const success = StreamingControllerRegistry.abortStreaming(this.id);
+      if (success) {
+        console.log("AgentSession: Successfully aborted streaming");
+      } else {
+        console.log("AgentSession: No active streaming to abort");
+      }
+    } else {
+      console.log("AgentSession: No session ID available for stopping streaming");
     }
   }
 

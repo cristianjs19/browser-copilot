@@ -8,10 +8,23 @@ import MarkdownItPlantuml from 'markdown-it-plantuml'
 import { ExclamationCircleIcon, CircleFilledIcon } from 'vue-tabler-icons'
 import NewPromptButton from './NewPromptButton.vue'
 import CopyButton from './CopyButton.vue'
+import ThoughtProcess from './ThoughtProcess.vue'
 import * as echarts from 'echarts'
 import moment from 'moment'
 
-const props = defineProps<{ text: string, file: Record<string, string>, isUser: boolean, isComplete: boolean, isSuccess: boolean, agentLogo: string, agentName: string, agentId: string }>()
+const props = defineProps<{ 
+  text: string, 
+  file: Record<string, string>, 
+  isUser: boolean, 
+  isComplete: boolean, 
+  isSuccess: boolean, 
+  agentLogo: string, 
+  agentName: string, 
+  agentId: string,
+  tokens?: number,
+  thoughtsTokens?: number,
+  thoughts?: string
+}>()
 const { t } = useI18n()
 const renderedMsg = computed(() => props.isUser ? props.text.replaceAll('\n', '<br/>') : renderMarkDown(props.text))
 const messageElement = ref<HTMLElement | null>(null);
@@ -131,6 +144,14 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div class="mt-2 ml-8 mr-2">
+      <!-- Thinking Process Component (only for AI responses) -->
+      <ThoughtProcess 
+        v-if="!isUser" 
+        :thoughts="thoughts" 
+        :thoughts-tokens="thoughtsTokens" 
+        :is-complete="isComplete" 
+      />
+      
       <div>
         <template v-if="file.data">
           <audio controls>
@@ -142,7 +163,13 @@ onBeforeUnmount(() => {
             class="flex flex-col text-sm font-light leading-tight gap-2 rendered-msg" />
         </template>
       </div>
-      <div class="ml-3 dot-pulse" v-if="!isComplete" />
+      <div class="ml-3 dot-pulse" v-if="!isComplete && !thoughts" />
+      
+      <!-- Token usage information for AI agent responses -->
+      <div v-if="!isUser && isComplete && tokens !== undefined" class="mt-2 text-xs text-gray-500 flex items-center gap-2">
+        <span>{{ tokens }} tokens</span>
+        <span v-if="thoughtsTokens !== undefined" class="text-blue-400">({{ thoughtsTokens }} thinking)</span>
+      </div>
     </div>
   </div>
 </template>
@@ -207,15 +234,31 @@ div a {
   border-radius: var(--spacing);
   width: fit-content;
 }
+
+/* Thinking mode styles */
+.dot-pulse {
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
 </style>
 
 <i18n>
 {
   "en": {
-    "you": "You"
+    "you": "You",
+    "collapse": "Collapse"
   },
   "es": {
-    "you": "Tú"
+    "you": "Tú",
+    "collapse": "Colapsar"
   }
 }
 </i18n>

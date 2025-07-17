@@ -45,20 +45,78 @@ export async function* fetchStreamJson(url: string, options?: RequestInit): Asyn
 async function* fetchSSEStream(resp: Response, url: string, options?: RequestInit): AsyncIterable<any> {
   let reader = resp.body!.getReader()
   let done = false
-  while (!done) {
-    let result = await reader.read()
-    done = result.done
-    let events = ServerSentEvent.fromBytes(result.value!)
-    for (const event of events) {
-      if (event.event === "error") {
-        console.warn(`Problem while reading stream response from ${options?.method ? options.method : 'GET'} ${url}`, event)
-        throw new HttpServiceError()
+  let buffer = ''
+  
+  try {
+    while (!done) {
+      // Check if request was aborted
+      if (options?.signal?.aborted) {
+        console.log("SSE stream cancelled by AbortSignal");
+        break;
       }
-      if (event.event) {
-        yield JSON.parse(event.data)
-      } else {
-        yield event.data
+      
+      let result = await reader.read()
+      done = result.done
+      
+      if (result.value) {
+        // Accumulate the new data in the buffer
+        buffer += new TextDecoder("utf-8").decode(result.value)
+        
+        // Process complete events from the buffer
+        let eventEnd = buffer.indexOf('\n\n')
+        while (eventEnd !== -1) {
+          let eventData = buffer.substring(0, eventEnd)
+          buffer = buffer.substring(eventEnd + 2)
+          
+          if (eventData.trim()) {
+            try {
+              const event = ServerSentEvent.parseEventString(eventData)
+              if (event.event === "error") {
+                console.warn(`Problem while reading stream response from ${options?.method ? options.method : 'GET'} ${url}`, event)
+                throw new HttpServiceError()
+              }
+              
+              if (event.event) {
+                yield JSON.parse(event.data)
+              } else {
+                // Parse JSON data for StreamingChunk format
+                try {
+                  const parsed = JSON.parse(event.data)
+                  yield parsed
+                } catch (e) {
+                  // Log the parsing error and skip malformed chunks instead of yielding raw data
+                  console.warn(`Failed to parse SSE chunk as JSON, skipping: ${event.data}`, e)
+                  // Don't yield anything for malformed chunks - just skip them
+                }
+              }
+            } catch (e) {
+              console.warn(`Failed to parse SSE event, skipping: ${eventData}`, e)
+            }
+          }
+          
+          eventEnd = buffer.indexOf('\n\n')
+        }
       }
+    }
+  } finally {
+    // Always cancel the reader when done or aborted
+    await reader.cancel();
+  }
+  
+  // Process any remaining data in the buffer
+  if (buffer.trim()) {
+    try {
+      const event = ServerSentEvent.parseEventString(buffer)
+      if (event.data.trim()) {
+        try {
+          const parsed = JSON.parse(event.data)
+          yield parsed
+        } catch (e) {
+          console.warn(`Failed to parse final SSE chunk as JSON, skipping: ${event.data}`, e)
+        }
+      }
+    } catch (e) {
+      console.warn(`Failed to parse final SSE event, skipping: ${buffer}`, e)
     }
   }
 }
@@ -75,7 +133,9 @@ class ServerSentEvent {
   public static fromBytes(bs: Uint8Array): ServerSentEvent[] {
     let text = new TextDecoder("utf-8").decode(bs)
     let events = text.split(/\r\n\r\n/)
-    return events.map(e => ServerSentEvent.parseEvent(e))
+    return events
+      .map(e => ServerSentEvent.parseEvent(e))
+      .filter(event => event.data.trim() !== '') // Filter out empty events
   }
 
   private static parseEvent(event: string): ServerSentEvent {
@@ -87,6 +147,22 @@ class ServerSentEvent {
     }
     let dataPrefix = "data: "
     let data = parts.filter(p => p.startsWith(dataPrefix)).map(p => p.substring(dataPrefix.length)).join("\n")
+    return new ServerSentEvent(data, eventType)
+  }
+
+  public static parseEventString(event: string): ServerSentEvent {
+    let parts = event.split(/\r?\n/)
+    let eventType: string | undefined
+    let data: string = ''
+    
+    for (const part of parts) {
+      if (part.startsWith('event: ')) {
+        eventType = part.substring('event: '.length)
+      } else if (part.startsWith('data: ')) {
+        data = part.substring('data: '.length)
+      }
+    }
+    
     return new ServerSentEvent(data, eventType)
   }
 }

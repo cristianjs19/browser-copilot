@@ -24,6 +24,7 @@ let displaying = false
 const minSidebarSize = 200
 let lastResizePos = 0
 const messages = ref<ChatMessage[]>([])
+let streamingController: AbortController | null = null
 
 onBeforeMount(async () => {
   await restoreTabState()
@@ -165,10 +166,34 @@ const onUserMessage = async (text: string, file: Record<string, string>) => {
   agentSession!.processUserMessage(text, file, onAgentResponse, onAgentError)
 }
 
-const onAgentResponse = (text: string, complete: boolean) => {
+const onStopStreaming = async () => {
+  const agentSession = await findAgentSession(await getCurrentTabId())
+  
+  if (agentSession) {
+    agentSession.stopStreaming()
+    const lastMessage = messages.value[messages.value.length - 1]
+    
+    if (!lastMessage.isComplete) {
+      lastMessage.isComplete = true
+      lastMessage.isSuccess = false
+    }
+  } else {
+    console.log("Index.vue: No agent session found");
+  }
+}
+
+const onAgentResponse = (text: string, complete: boolean, tokens?: number, thoughtsTokens?: number, thoughts?: string) => {
+
   const lastMessage = messages.value[messages.value.length - 1]
   lastMessage.isComplete = complete
   lastMessage.text += text
+  if (complete && tokens !== undefined) {
+    lastMessage.tokens = tokens
+    lastMessage.thoughtsTokens = thoughtsTokens
+  }
+  if (thoughts !== undefined) {
+    lastMessage.thoughts = thoughts
+  }
 }
 
 const onAgentError = (error: any) => {
@@ -202,7 +227,7 @@ const onAgentError = (error: any) => {
     <div class="absolute left-0 z-auto cursor-ew-resize w-2 h-full" @mousedown="onStartResize" />
     <CopilotChat v-if="agent" :messages="messages" :agent-id="agent.manifest.id" :agent-name="agent.manifest.name"
       :agent-logo="agent.logo" :agent-capabilities="agent.manifest.capabilities || []" @userMessage="onUserMessage"
-      @close="onCloseSidebar" />
+      @stopStreaming="onStopStreaming" @close="onCloseSidebar" />
     <CopilotList v-if="!agent" @activateAgent="onActivateAgent" @close="onCloseSidebar" />
   </div>
 </template>
@@ -231,12 +256,14 @@ const onAgentError = (error: any) => {
     "interactionSummaryError": "I could not process some information from the current site. This might impact the information and answers I provide. If the issue persists please contact [support](mailto:{contactEmail}?subject=Interaction%20issue)",
     "agentAnswerError": "I am currently unable to complete your request. You can try again and if the issue persists contact [support](mailto:{contactEmail}?subject=Question%20issue)",
     "flowStepMissingElement": "I could not find the element '{selector}'. This might be due to recent changes in the page which I am not aware of. Please try again and if the issue persists contact [support](mailto:{contactEmail}?subject=Navigation%20element).",
+    "responseInterrupted": "The response was interrupted. Please try again."
   },
   "es": {
     "activationError": "No se pudo activar el Copiloto {agentName}. Puedes intentar de nuevo y si el problema persiste contactar al [soporte del Copiloto {agentName}](mailto:{contactEmail}?subject=Activation%20issue)",
     "interactionSummaryError": "No pude procesar informacion generada por la página actual. Esto puede impactar en la información y respuestas que te puedo dar. Si el problema persiste por favor contacta a [soporte](mailto:{contactEmail})?subject=Interaction%20issue",
     "agentAnswerError": "Ahora no puedo completar tu pedido. Puedes intentar de nuevo y si el problema persiste contactar a [soporte](mailto:{contactEmail}?subject=Question%20issue)",
     "flowStepMissingElement": "No pude encontrar el elemento '{selector}'. Esto puede ser debido a cambios recientes en la página de los cuales no tengo conocimiento. Por favor intenta de nuevo y si el problema persiste contacta a [soporte](mailto:{contactEmail}?subject=Navigation%20element).", 
+    "responseInterrupted": "La respuesta fue interrumpida. Por favor intenta de nuevo."
   }
 }
 </i18n>
