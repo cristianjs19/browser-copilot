@@ -194,7 +194,15 @@ const showStopButton = computed(() => {
             :placeholder="t('placeholder')" v-model="inputText" @keydown="onKeydown" focused
             :cursor-position="inputPosition" />
           <div class="flex items-center">
-            <button @click="sendMessage" :disabled="!canSendMessage" 
+            <!-- Stop Button - shown when streaming (works in both thinking modes) -->
+            <button v-if="showStopButton" @click="stopStreaming" 
+              data-testid="stop-button"
+              class="group rounded-full aspect-square bg-red-600 hover:bg-red-800 ml-1">
+              <player-stop-icon color="white" class="group-hover:text-white" />
+            </button>
+            <!-- Send Button - shown when not streaming -->
+            <button v-else @click="sendMessage" :disabled="!canSendMessage"
+              data-testid="send-button"
               class="group rounded-full aspect-square bg-violet-600 hover:bg-violet-800 ml-1 disabled:opacity-50">
               <brand-telegram-icon color="white" class="group-hover:text-white" />
             </button>
@@ -224,6 +232,7 @@ const showStopButton = computed(() => {
         <div class="flex items-center space-x-2">
           <button
           @click="toggleThinkingMode"
+          data-testid="thinking-toggle"
           :class="`relative inline-flex h-5 w-10 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 ${
               thinkingModeEnabled ? 'bg-violet-600' : 'bg-gray-400'
             } cursor-pointer`"
@@ -258,11 +267,13 @@ const showStopButton = computed(() => {
           <div class="flex items-center">
             <!-- Stop Button - shown when streaming (works in both thinking modes) -->
             <button v-if="showStopButton" @click="stopStreaming" 
+              data-testid="stop-button"
               class="group rounded-full aspect-square bg-red-600 hover:bg-red-800 ml-1">
               <player-stop-icon color="white" class="group-hover:text-white" />
             </button>
             <!-- Send Button - shown when not streaming -->
             <button v-else @click="sendMessage" :disabled="!canSendMessage"
+              data-testid="send-button"
               class="group rounded-full aspect-square bg-violet-600 hover:bg-violet-800 ml-1 disabled:opacity-50">
               <brand-telegram-icon color="white" class="group-hover:text-white" />
             </button>
