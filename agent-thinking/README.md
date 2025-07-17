@@ -1,7 +1,15 @@
-# agent-extended
+# agent-thinking
 
-This is an agent example that integrates with OpenAI (or Azure OpenAI) and provides a similar basic experience to ChatGPT, including authentication, proper session handling, response streaming and transcripts support.
-
+This agent is an extension of the agent-extended copilot that integrates with Google Gemini API and provides a some extra features like:
+- Accessing a reasoner version of the model called "thinking mode".
+- Be able to alternate between both modes within the same conversation without loosing the context.
+- Access to the thought process detail on the "thinking mode".
+- A standard response model applied to all 'chat' endpoints and different agents, making it easier to provide additional information about the agent's response, such as tokens consumed during the interaction, and distinguishing between a 'standard' content response and 'thoughts'.
+- Information about the consumed tokens on each interaction, including the detail of the "standard" response tokens and the tokens spent on the thought process.
+- Configure the front end client to use the "thinking mode" by including the capability "has_thinking_mode" to the manifest.json file
+- A Pytest test battery to validate some key aspects of its functioning.
+On top of the existing ones, including authentication, proper session handling, response streaming, and transcripts support.
+- Hot reload for the backend server to enhance the development experience.
 This agent also provides an example on how to automate basic flows with the copilot, providing an example automation to navigate to abstracta.us contact site and filling the full name field. 
 
 It is developed using the following:
@@ -12,12 +20,13 @@ It is developed using the following:
 
 ## Agent Requirements
 
-To develop an agent compatible with the browser extension, you just have to define 4 endpoints:
+To develop an agent compatible with the browser extension, you just have to define 5 endpoints:
 
-1. An `manifest.json` endpoint: This endpoint provides metadata about the agent. You can find an example in the [included manifest file](./gpt_agent/assets/manifest.json).
+1. An `manifest.json` endpoint: This endpoint provides metadata about the agent. You can find an example in the [included manifest file](./gpt_agent/assets/manifest.json). Include the "has_thinking_mode" capability to enable the thinking mode ("capabilities": [ "has_thinking_mode" ]) .
 2. A `logo.png` endpoint: This provides the logo that is displayed in the browser extension.
 3. Session creation endpoint: Each browser tab creates a separate session, containing messages and relevant context for the agent active in that tab.
-4. Question answering endpoint: This endpoint is queried by the browser extension to obtain the appropriate answer from the agent for each user message in the chat.
+4. Standard answering endpoint: This endpoint is queried by the browser extension to obtain the appropriate answer from the agent for each user message in the chat.
+5. Thinking answering endpoint: Allow the user to get more powerful and deep reasoning.
 
 ### Advanced Use case
 
@@ -164,6 +173,15 @@ For the time being, we haven't found a generic solution that allows direct integ
 Another issue we have faced is that using [Google's proposed solution for Chrome extensions](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth) requires knowing the client ID before building and publishing the extension, which is not good to allow any user to be able to use their own Google OAuth config without having to rebuild the extension.
 If you have any ideas please let us know by creating an issue or discussion in this repository.
 
+#### Testing
+
+This project includes a test batery implemented with Pytest library to validate the functioning of some key aspects of the project.
+
+After the .env file is set up and the docker environment is running, run the test battery with this command:
+```bash
+docker exec agent_thinking poetry run pytest tests/
+```
+
 ## Basic Agent API
 
 Here are some examples of the main requests generated from the extension:
@@ -189,5 +207,10 @@ SESSION_ID=$(curl -X POST -H "Content-Type: application/json" --data '{ "locales
 ### Ask question
 
 ```bash
-curl -X POST -H "Content-Type: application/json" --data '{"question": "what time is it?"}' http://localhost:8000/sessions/${SESSION_ID}/questions
+curl -X POST -H "Content-Type: application/json" --data '{"question": "what time is it?"}' http://localhost:8000/sessions/${SESSION_ID}/chat-gemini
+```
+### Ask question on thinking mode
+
+```bash
+curl -X POST -H "Content-Type: application/json" --data '{"question": "Which are faster, cats or dogs?"}' http://localhost:8000/sessions/${SESSION_ID}/thinking-chat-gemini
 ```

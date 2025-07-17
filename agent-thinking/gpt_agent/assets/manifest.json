@@ -14,8 +14,7 @@
       { "name" : "clock", "text" : "what is the current time?" },
       { "name" : "abstracta", "text" : "please contact Abstracta" },
       { "name" : "polluting", "text" : "What are the main issues of polluting our planet?" },
-      { "name" : "planes", "text" : "Why planes are able to fly, in spite they are big and heavy machines?" },
-      { "name" : "repeat", "text" : "Oh I've lost the response, can you repeat your last message, please?" }
+      { "name" : "planes", "text" : "Why planes are able to fly, in spite they are big and heavy machines?" }
   ],
   "contactEmail": "{{ contact_email }}"
 }

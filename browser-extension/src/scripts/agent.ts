@@ -196,7 +196,7 @@ export class Agent {
     }
 
     private sessionUrl(sessionId: string): string {
-        return `${this.url}/sessions/${sessionId}`
+        return `${this.url}${sessionId}`
     }
 
     public async transcriptAudio(audioFileBase64: string, sessionId: string, authService?: AuthService) {
